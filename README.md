@@ -175,6 +175,7 @@ That's enough to get a working switch. Replace `192.168.1.50` with your ratgdo's
 | `bypassValue` | boolean | `true` | Value POSTed to `settingKey` before the close command. For `obstFromStatus`: `true` = use status messages, ignore the pin (the sun-flare false trip). |
 | `normalValue` | boolean | `false` | Value POSTed to `settingKey` after the close command — your normal pre-tap setting. |
 | `closeWaitMs` | integer | `18000` | Milliseconds to wait between sending close and restoring `settingKey`. Should comfortably exceed your door's full close duration. Min `1000`, max `60000`. |
+| `interStepDelayMs` | integer | `500` | Milliseconds to wait between Step 1 (set `settingKey`) and Step 2 (send close). ratgdo's HTTP server briefly stalls while it writes config to flash; back-to-back POSTs at 300ms hit ECONNRESET. 500ms is the happy-path default — if a particular run still hits ECONNRESET due to a slow flash write, the plugin auto-retries once with another `interStepDelayMs` wait (effective worst case = 1s). Tune higher only if you see frequent retries in Homebridge logs. Min `200`, max `10000`. |
 | `cooldownMs` | integer | `20000` | Minimum milliseconds between consecutive force-close triggers. Min `0`, max `120000`. |
 
 ## How it works
@@ -199,6 +200,8 @@ The setting being toggled (`obstFromStatus`) corresponds to the **"Get obstructi
 - **Where to look at logs.** Homebridge: `sudo hb-service logs`. ratgdo's own log: `http://YOUR-RATGDO-IP/showlog`. The plugin logs each step of the four-step sequence with `[Force Close Garage]` prefixes (or whatever name you configured).
 
 - **Cooldown active error.** You tapped the switch too soon after the previous tap. Wait for the configured `cooldownMs` to elapse. Default is 20 seconds.
+
+- **HomeKit Home app still shows "Open" after a successful Force Close.** The door is actually closed — ratgdo updates its `target_door_state` HomeKit characteristic correctly when our plugin issues the close, but iOS Home app aggressively caches accessory state and doesn't always refresh the UI when changes come from outside HomeKit's command path (i.e., from the plugin's HTTP POST instead of a tap on the regular ratgdo tile). To force a refresh: pull down on the room view in the Home app, or kill and reopen the app. This is an iOS Home app limitation, not a plugin or ratgdo firmware bug. Verified by checking ratgdo's internal log — `Door state changing from Closing to Closed (target Closed)` confirms the notify path fired, the iOS UI just hadn't pulled the update.
 
 ## Releasing (maintainer notes)
 

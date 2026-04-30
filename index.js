@@ -47,6 +47,17 @@ class RatgdoForceCloseAccessory {
     // Cooldown to prevent fat-finger re-trigger
     this.cooldownMs = clampInt(this.config.cooldownMs, 0, 120000, 20000);
 
+    // Pause between Step 1 (set obstFromStatus) and Step 2 (send close).
+    // ratgdo's HTTP handler calls userConfig->save() (NVS flash write) on
+    // every config-change POST; while that write is in flight the firmware
+    // is single-threaded and the HTTP server can be unresponsive — short
+    // back-to-back POSTs at 300ms reliably hit ECONNRESET. 500ms is the
+    // happy-path default that works on a healthy ratgdo; if a particular
+    // run hits a slow flash write, postSetGdoWithRetry catches the resulting
+    // ECONNRESET and retries with another delay — so the worst-case path
+    // is automatic without making everyone pay the longer wait every time.
+    this.interStepDelayMs = clampInt(this.config.interStepDelayMs, 200, 10000, 500);
+
     this.busy = false;
     this.lastFiredAt = 0;
 
@@ -125,22 +136,23 @@ class RatgdoForceCloseAccessory {
       await this.postSetGdo(this.settingKey, this.bypassValue);
       bypassApplied = true;
 
-      // tiny pause so the firmware applies it before we send close
-      await sleep(300);
+      // Wait for ratgdo's NVS flash write from Step 1 to complete before
+      // the close command. See the comment on this.interStepDelayMs above.
+      await sleep(this.interStepDelayMs);
 
       this.log.info('Step 2/3: garageDoorState → 0 (close)');
-      await this.postSetGdo('garageDoorState', 0);
+      await this.postSetGdoWithRetry('garageDoorState', 0);
 
       this.log.info(`Step 3/3: waiting ${this.closeWaitMs}ms then restoring ${this.settingKey} → ${formatVal(this.normalValue)}`);
       await sleep(this.closeWaitMs);
-      await this.postSetGdo(this.settingKey, this.normalValue);
+      await this.postSetGdoWithRetry(this.settingKey, this.normalValue);
       bypassApplied = false;
     } finally {
       // If we changed the setting and didn't restore it (error mid-sequence), try again.
       if (bypassApplied) {
         this.log.warn(`Restoring ${this.settingKey} → ${formatVal(this.normalValue)} after error`);
         try {
-          await this.postSetGdo(this.settingKey, this.normalValue);
+          await this.postSetGdoWithRetry(this.settingKey, this.normalValue);
         } catch (err) {
           this.log.error(
             `CRITICAL: failed to restore ${this.settingKey} to ${formatVal(this.normalValue)}: ${err.message}. ` +
@@ -156,9 +168,29 @@ class RatgdoForceCloseAccessory {
     const body = `${encodeURIComponent(key)}=${encodeURIComponent(formatVal(value))}`;
     return this.httpRequestWithAuth(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        // Force a fresh TCP connection per POST. ratgdo's tiny HTTP server
+        // doesn't reliably survive keep-alive reuse across rapid requests.
+        'Connection': 'close',
+      },
       body,
     });
+  }
+
+  // postSetGdo with one retry on transient connection errors. Use for the
+  // close command (Step 2) — if ratgdo's HTTP server is still busy from the
+  // Step 1 flash write when we POST, we'll see ECONNRESET / ECONNREFUSED.
+  // Wait an extra interStepDelayMs and try once more before giving up.
+  async postSetGdoWithRetry(key, value) {
+    try {
+      return await this.postSetGdo(key, value);
+    } catch (err) {
+      if (!isTransientConnectionError(err)) throw err;
+      this.log.warn(`Transient connection error on ${key}=${formatVal(value)} (${err.code || err.message}); waiting ${this.interStepDelayMs}ms then retrying once`);
+      await sleep(this.interStepDelayMs);
+      return this.postSetGdo(key, value);
+    }
   }
 
   // Handles digest auth in case ratgdo's "Require Password" is enabled.
@@ -200,6 +232,17 @@ function clampInt(v, min, max, fallback) {
   const n = Number.parseInt(v, 10);
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, n));
+}
+
+// Errors that can be retried once — typically caused by ratgdo's HTTP
+// server being briefly unavailable while it writes config to flash, or by
+// a TCP connection that ratgdo's tiny stack closed mid-conversation.
+function isTransientConnectionError(err) {
+  if (!err) return false;
+  const code = err.code || '';
+  if (code === 'ECONNRESET' || code === 'ECONNREFUSED' || code === 'ETIMEDOUT' || code === 'EPIPE') return true;
+  const msg = String(err.message || '');
+  return /econnreset|econnrefused|etimedout|epipe/i.test(msg);
 }
 
 function formatVal(v) {
