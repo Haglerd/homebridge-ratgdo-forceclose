@@ -35,12 +35,17 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          # 22 LTS is what we want for Trusted Publishing — it ships with npm
-          # 11.5.1+, which auto-detects the GitHub Actions OIDC token and
-          # exchanges it for a short-lived publish token at runtime. Older
-          # bundled npms can't do that.
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
+
+      - name: Force-upgrade npm to latest
+        # Trusted Publishing requires npm 11.5.1+. Node 22 LTS still ships with
+        # bundled npm 10.x in some patch releases, which silently falls back to
+        # token auth and 404s when there's no token. Upgrade unconditionally.
+        run: |
+          npm install -g npm@latest
+          echo "node: $(node --version)"
+          echo "npm: $(npm --version)"
 
       - name: Sanity — confirm package.json version matches the tag
         # Only runs on tag pushes. Refuses to publish if you tagged v1.0.2 but
