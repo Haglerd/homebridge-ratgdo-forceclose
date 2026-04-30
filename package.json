@@ -1,0 +1,12 @@
+{
+  "name": "homebridge-ratgdo-forceclose",
+  "version": "1.0.0",
+  "description": "HomeKit momentary switch that toggles ratgdo's obstruction-from-status setting, sends close, then restores the setting.",
+  "main": "index.js",
+  "engines": {
+    "node": ">=18.0.0",
+    "homebridge": ">=1.6.0"
+  },
+  "keywords": ["homebridge-plugin", "ratgdo", "garage", "homekit"],
+  "license": "MIT"
+}

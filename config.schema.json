@@ -1,0 +1,69 @@
+{
+  "pluginAlias": "RatgdoForceClose",
+  "pluginType": "accessory",
+  "singular": false,
+  "headerDisplay": "Adds a momentary 'Force Close' switch. On tap: toggles ratgdo's obstruction-from-status setting (so the firmware ignores the false sun-glare pin signal), sends close, waits, then restores the setting.\n\n**Use only when you can see the door and confirm nothing's in the way. Don't put this in an automation.**",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Switch Name",
+        "type": "string",
+        "default": "Force Close Garage",
+        "required": true
+      },
+      "ratgdoHost": {
+        "title": "ratgdo URL",
+        "type": "string",
+        "placeholder": "http://192.168.1.50",
+        "required": true,
+        "description": "Base URL of your ratgdo (the IP or hostname you use to access its web UI)."
+      },
+      "username": {
+        "title": "Username (only if 'Require Password' is enabled on ratgdo)",
+        "type": "string"
+      },
+      "password": {
+        "title": "Password",
+        "type": "string"
+      },
+      "settingKey": {
+        "title": "Setting key to toggle",
+        "type": "string",
+        "default": "obstFromStatus",
+        "oneOf": [
+          { "title": "obstFromStatus (Get obstruction from GDO status messages)", "enum": ["obstFromStatus"] },
+          { "title": "pinBasedObst (inverse — read from sensor pin)", "enum": ["pinBasedObst"] }
+        ],
+        "description": "Default matches the 'Get obstruction from GDO status messages' checkbox in ratgdo's settings page. If toggling that one doesn't get the door to close, switch to pinBasedObst (and flip the bypass/normal values below)."
+      },
+      "bypassValue": {
+        "title": "Value during close (bypass state)",
+        "type": "boolean",
+        "default": true,
+        "description": "For obstFromStatus: true means use messages, ignore pin (the sun-flare false trip). For pinBasedObst: false means stop reading the pin."
+      },
+      "normalValue": {
+        "title": "Value to restore afterward",
+        "type": "boolean",
+        "default": false,
+        "description": "Your normal setting — what it should go back to when done."
+      },
+      "closeWaitMs": {
+        "title": "Wait between close and restore (ms)",
+        "type": "integer",
+        "default": 18000,
+        "minimum": 1000,
+        "maximum": 60000,
+        "description": "Should be longer than your full close duration so the bypass stays in effect until the door is fully shut. Your status.json shows closeDuration: 12s, so 18000 (18s) is a sensible default."
+      },
+      "cooldownMs": {
+        "title": "Cooldown between triggers (ms)",
+        "type": "integer",
+        "default": 20000,
+        "minimum": 0,
+        "maximum": 120000
+      }
+    }
+  }
+}
