@@ -189,7 +189,20 @@ The workflow refuses to publish if the git tag version doesn't match `package.js
 
 You can also trigger the workflow manually from the **Actions** tab via `workflow_dispatch` (publishes whatever's currently in `package.json`).
 
-**Required GitHub repo secret:** `NPM_TOKEN` — a granular access token with publish rights on this package and "Bypass 2FA" enabled. Set it once at **Settings → Secrets and variables → Actions → New repository secret**.
+**Authentication:** the workflow uses [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers) — no `NPM_TOKEN` secret in GitHub. Instead, npm is configured to trust this specific repo + workflow combination via OIDC, and GitHub Actions issues a short-lived OIDC token at run time. There's no long-lived secret to leak or rotate.
+
+**One-time setup** (after the workflow lands on `main`):
+
+1. Go to https://www.npmjs.com/package/homebridge-ratgdo-forceclose/access
+2. Scroll to **Trusted Publisher** → **Add trusted publisher**
+3. Choose **GitHub Actions** and fill in:
+   - Organization or user: `Haglerd`
+   - Repository: `homebridge-ratgdo-forceclose`
+   - Workflow filename: `publish.yml`
+   - Environment name: *(leave blank unless you set up a deployment environment)*
+4. Save.
+
+That's it. Push a `v*` tag and the workflow publishes — no secrets configured anywhere.
 
 ## License
 

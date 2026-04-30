@@ -35,10 +35,11 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          # 20 LTS is the safe modern minimum. The package.json engines field
-          # only requires >=18, so 20 satisfies that and is what most plugin
-          # publishers ship from.
-          node-version: '20'
+          # 22 LTS is what we want for Trusted Publishing — it ships with npm
+          # 11.5.1+, which auto-detects the GitHub Actions OIDC token and
+          # exchanges it for a short-lived publish token at runtime. Older
+          # bundled npms can't do that.
+          node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Sanity — confirm package.json version matches the tag
@@ -62,7 +63,12 @@ jobs:
           node -e "JSON.parse(require('fs').readFileSync('package.json','utf8'))"
           node -e "JSON.parse(require('fs').readFileSync('config.schema.json','utf8'))"
 
+      # No NPM_TOKEN secret is used. Authentication happens via Trusted
+      # Publishing: GitHub Actions issues an OIDC token (because of the
+      # `id-token: write` permission above), npm verifies that the token
+      # was issued for the registered (repo, workflow) pair, and grants a
+      # short-lived publish token transparently. Configure the trusted
+      # publisher once at:
+      # https://www.npmjs.com/package/homebridge-ratgdo-forceclose/access
       - name: Publish to npm
         run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
