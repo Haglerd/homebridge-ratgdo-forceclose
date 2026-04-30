@@ -10,6 +10,15 @@ A Homebridge accessory plugin that exposes a single momentary switch in HomeKit.
 
 It's not a replacement for HomeKit's normal garage-door integration. You should still use the regular ratgdo plugin (or HomeKit's native ratgdo support) for everyday open/close. This plugin only exists for the situation where the door **won't** close because the obstruction sensor is being false-tripped.
 
+## Two ways to use this
+
+This repo offers two delivery mechanisms for the same underlying behavior:
+
+- **Homebridge plugin** (the rest of this README) — full HomeKit integration with a tappable switch in the Home app, remote access via your HomeKit hub, configurable cooldown, optional digest auth.
+- **HomeKit Shortcut** — no Homebridge required; build a one-off button in the iOS Shortcuts app that fires the same three-POST sequence over the local network. Build instructions: [`shortcut/README.md`](shortcut/README.md).
+
+Both options do exactly the same thing on ratgdo's side. See the comparison table further down to pick which one fits your setup.
+
 ## The problem it solves
 
 Liftmaster and Chamberlain garage doors have an infrared photo-eye safety sensor at the bottom of the rails. The receiving eye can be blinded by direct sunlight at low sun angles (typically morning or late afternoon depending on which way your garage faces). When that happens, the opener registers a false obstruction and refuses to close.
@@ -32,6 +41,21 @@ The traditional workaround is to walk to the garage and **hold** the wall contro
 > **Do not put this switch in an automation, scene, or shortcut that runs without you watching.** The plugin enforces a configurable cooldown to prevent fat-finger re-triggers, but cooldown is not a substitute for paying attention.
 >
 > If your photo eye is being false-tripped frequently enough that you need this plugin, consider also installing a sun shroud or hood over the receiver eye — that's the actual fix.
+
+## Plugin vs. Shortcut: which should I use?
+
+| Feature | Homebridge Plugin | HomeKit Shortcut |
+|---|---|---|
+| Appears as a HomeKit switch in the Home app | Yes | No (lives in Shortcuts app, can be added to home screen / Siri / Control Center) |
+| Works from outside your local network (cellular, etc.) | Yes (via HomeKit hub) | No (LAN only) |
+| Shared with everyone in your Home automatically | Yes | No (each user builds their own) |
+| Requires Homebridge running on a Pi/server | Yes | No |
+| Setup time | ~10 min (install npm pkg, edit config) | ~5 min (build in Shortcuts app) |
+| Supports ratgdo "Require Password" (digest auth) | Yes | No |
+| Triggerable by Siri / HomePod | Indirectly (via Home app voice) | Directly ("Hey Siri, force close garage") |
+| Triggerable by HomeKit automation | Yes (but don't — see safety) | No |
+
+If you already run Homebridge, the plugin is the cleaner integration. If you don't, the Shortcut gets you the same close-the-door behavior with a five-minute build and no server. Build steps for the Shortcut: [`shortcut/README.md`](shortcut/README.md).
 
 ## Installation
 
