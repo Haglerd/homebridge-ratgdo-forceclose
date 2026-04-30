@@ -2,6 +2,20 @@
 
 All notable changes to this plugin are documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] — 2026-04-30
+
+### Fixed
+
+- **The actual real root cause of "POST 200 but door doesn't close":** when the obstFromStatus flash write crashes ratgdo, two layers come back at different times — the HTTP server recovers at ~12s post-reboot, but the wall-panel / GDO-comms layer doesn't recover until ~30s. During that ~18s gap, `/status.json` returns 200 OK with `garageDoorState: "Unknown"` and any `/setgdo` POST is accepted (200 OK) but **silently dropped** because the GDO-comms task isn't running yet. v1.0.3's `waitForRatgdoReady` only checked "did /status.json respond" — not enough. v1.0.4 now also requires `garageDoorState` to be a valid state (`Open` / `Closed` / `Opening` / `Closing` / `Stopped`) before declaring ratgdo ready and proceeding to Step 2. Confirmed by serial log analysis on a real ratgdo32 install.
+
+### Changed
+
+- **Restore value is now dynamic — uses the pre-flight reading instead of configured `normalValue`.** Previously Step 3 restored `obstFromStatus` to whatever `normalValue` was set to in the plugin config, which was wrong when the user's actual permanent state didn't match (e.g. pre-flight read `false` but `normalValue` was `true` → plugin permanently flipped the user's setting). v1.0.4 captures the original value during pre-flight and restores to that. Configured `normalValue` is now only used as a fallback when pre-flight reads fail entirely.
+- **Step 3 now skipped when no change was made.** If Step 1 was skipped (because `obstFromStatus` already matched `bypassValue`), the restore POST would have been a no-op rewrite that still triggers a flash write. v1.0.4 skips Step 3 in that case.
+- **`interStepMaxWaitMs` default raised from 30s → 45s, max from 60s → 90s.** Covers the full HTTP-recovery (~12s) + GDO-comms-recovery (~30s) window with margin. The plugin still proceeds as soon as ratgdo is actually ready, so this is a ceiling not a sleep.
+- **`closeWaitMs` default raised from 18s → 60s, max from 60s → 180s.** The restore POST in Step 3 is also a flash write, and triggering it before the door is fully shut and the firmware has settled risks a second crash. 60s covers ~12s door close + ~48s settle.
+- Polling logs now distinguish "HTTP up" from "fully ready (GDO comms back)" so the recovery sequence is visible: `HTTP up after 11920ms but GDO-comms not yet (door=Unknown); continuing to poll` followed by `ratgdo fully ready (door=Open) after 28140ms (HTTP-up at 11920ms, GDO-comms +16220ms)`.
+
 ## [1.0.3] — 2026-04-30
 
 ### Fixed
@@ -62,6 +76,7 @@ Initial public release on npm.
 - **CI workflow** (`.github/workflows/ci.yml`) — runs `node --check` and JSON validation on every PR.
 - **Tag-triggered npm publish workflow** (`.github/workflows/publish.yml`) using npm Trusted Publishing (OIDC) — no long-lived secrets.
 
+[1.0.4]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.0.4
 [1.0.3]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.0.3
 [1.0.2]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.0.2
 [1.0.1]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.0.1
