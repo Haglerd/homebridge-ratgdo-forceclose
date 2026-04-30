@@ -52,26 +52,26 @@
         "description": "For obstFromStatus: true means use status messages, ignore the photo-eye pin (the sun-flare false trip). For pinBasedObst: false means stop reading the pin entirely."
       },
       "normalValue": {
-        "title": "Value to restore afterward",
+        "title": "Fallback restore value",
         "type": "boolean",
         "default": false,
-        "description": "Your normal pre-tap setting — what the plugin restores after the close completes."
+        "description": "FALLBACK ONLY. The plugin reads the current obstFromStatus value during pre-flight and restores back to whatever was there — so under normal operation this field is unused. It's only consulted if the pre-flight status read fails entirely (rare). Leave at the default unless you know your pre-flight reads are unreliable."
       },
       "closeWaitMs": {
         "title": "Wait between close and restore (ms)",
         "type": "integer",
-        "default": 18000,
+        "default": 60000,
         "minimum": 1000,
-        "maximum": 60000,
-        "description": "Should comfortably exceed your door's full close duration so the bypass stays in effect until the door is fully shut. The 18000 (18s) default is conservative and works for most residential garage doors; check your ratgdo's status page for closeDuration if you want to tune it."
+        "maximum": 180000,
+        "description": "How long to wait after the close POST before restoring obstFromStatus. Should be long enough for the door to physically finish closing AND for ratgdo's firmware to fully settle, because the restore POST also writes to flash (which can crash ratgdo a second time). 60s default = ~12s for the door + ~48s settle. Bump higher if you see restore POSTs failing in logs."
       },
       "interStepMaxWaitMs": {
         "title": "Max wait for ratgdo to be ready between steps (ms)",
         "type": "integer",
-        "default": 15000,
+        "default": 45000,
         "minimum": 1000,
-        "maximum": 60000,
-        "description": "After Step 1 (obstFromStatus toggle), the plugin polls GET /status.json every 250ms until ratgdo's HTTP server responds, then immediately sends Step 2 (close). This is a maximum — if ratgdo answers in 200ms, the close fires in 200ms. 15s default covers the worst case where the firmware briefly crashes/restarts after a config-change POST."
+        "maximum": 90000,
+        "description": "After the obstFromStatus flash write reboots ratgdo, the plugin polls GET /status.json every 250ms until ratgdo is FULLY ready — meaning HTTP responds AND garageDoorState is a valid (non-Unknown) state. Real serial logs show HTTP comes back ~12s after a flash-write reboot but the wall-panel/GDO-comms layer can take ~30s; close commands sent during that window are silently dropped. 45s default covers worst case."
       },
       "cooldownMs": {
         "title": "Cooldown between triggers (ms)",

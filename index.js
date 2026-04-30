@@ -41,22 +41,24 @@ class RatgdoForceCloseAccessory {
     this.normalValue = this.config.normalValue !== undefined ? this.config.normalValue : false;
 
     // How long the bypass setting stays in effect after the close command.
-    // Should comfortably exceed the door's full close duration.
-    this.closeWaitMs = clampInt(this.config.closeWaitMs, 1000, 60000, 18000);
+    // Two reasons this should be generous: (a) the door has to physically
+    // finish closing (~12s for a typical residential door), and (b) the
+    // restore POST writes to flash and can crash/reboot ratgdo a SECOND
+    // time, so we want the door fully shut and the firmware settled before
+    // we kick it again. 60s default = ~12s close + ~48s settle.
+    this.closeWaitMs = clampInt(this.config.closeWaitMs, 1000, 180000, 60000);
 
     // Cooldown to prevent fat-finger re-trigger
     this.cooldownMs = clampInt(this.config.cooldownMs, 0, 120000, 20000);
 
-    // Maximum time to wait for ratgdo's HTTP server to come back after the
-    // Step 1 obstFromStatus POST. Instead of a fixed sleep, the plugin polls
-    // GET /status.json every 250ms until it responds — proceeds with the
-    // close as soon as ratgdo is ready, no faster, no slower. 15s default
-    // covers the worst case where ratgdo's NVS flash write is slow or the
-    // firmware briefly crashes/restarts after the config change.
-    // Browser testing showed ratgdo can take ~10s to come back after the
-    // obstFromStatus flash write reboots its firmware. 30s default gives
-    // plenty of headroom for slower flash / WiFi reconnect.
-    this.interStepMaxWaitMs = clampInt(this.config.interStepMaxWaitMs, 1000, 60000, 30000);
+    // Maximum time to wait for ratgdo to be fully ready after the Step 1
+    // obstFromStatus POST. Polls GET /status.json every 250ms and considers
+    // ratgdo ready only when (a) HTTP responds AND (b) garageDoorState is a
+    // valid state (not "Unknown"). Real serial logs show the HTTP server
+    // comes back ~12s after a flash-write reboot but the wall-panel /
+    // GDO-comms layer can take ~30s to recover; close commands sent during
+    // that window are silently dropped. 45s default covers worst case.
+    this.interStepMaxWaitMs = clampInt(this.config.interStepMaxWaitMs, 1000, 90000, 45000);
 
     this.busy = false;
     this.lastFiredAt = 0;
@@ -75,7 +77,7 @@ class RatgdoForceCloseAccessory {
       .setCharacteristic(Characteristic.Manufacturer, 'DIY')
       .setCharacteristic(Characteristic.Model, 'Ratgdo Force Close')
       .setCharacteristic(Characteristic.SerialNumber, this.name.replace(/\s+/g, '-'))
-      .setCharacteristic(Characteristic.FirmwareRevision, '1.0.3');
+      .setCharacteristic(Characteristic.FirmwareRevision, '1.0.4');
 
     this.switchService = new Service.Switch(this.name);
     this.switchService
@@ -88,9 +90,9 @@ class RatgdoForceCloseAccessory {
     }
 
     this.log.info(
-      `[${this.name}] On tap: POST ${this.settingKey}=${formatVal(this.bypassValue)}, ` +
-      `POST garageDoorState=0, wait ${this.closeWaitMs}ms, ` +
-      `POST ${this.settingKey}=${formatVal(this.normalValue)}`
+      `[${this.name}] On tap: pre-flight read → POST ${this.settingKey}=${formatVal(this.bypassValue)} (if needed) → ` +
+      `POST garageDoorState=0 → wait ${this.closeWaitMs}ms → ` +
+      `POST ${this.settingKey}=<original pre-flight value> (if changed)`
     );
   }
 
@@ -140,8 +142,13 @@ class RatgdoForceCloseAccessory {
   }
 
   async runForceClose() {
-    // Pre-flight: read ratgdo's current state, used to skip the whole
-    // sequence if the door is already Closed (no work needed).
+    // Pre-flight: read ratgdo's current state. We use this for two things:
+    //  1. Skip the whole sequence if the door is already Closed.
+    //  2. Capture the ORIGINAL value of obstFromStatus, so Step 3 can
+    //     restore it to whatever it was before the user tapped the
+    //     switch — instead of a hard-coded config value. If the user's
+    //     normal state is false, we restore to false; if it's true, we
+    //     restore to true (which would also have skipped Step 1).
     const status = await this.getStatusJson();
     if (status) {
       this.log.info(`Pre-flight: door=${status.garageDoorState}, ${this.settingKey}=${status[this.settingKey]}`);
@@ -151,11 +158,20 @@ class RatgdoForceCloseAccessory {
       }
     }
 
-    // Skip Step 1 if obstFromStatus already matches bypassValue (no flash
-    // write needed). Skip Step 3 if it would not change. Helps users whose
-    // permanent state already matches; no-op for users whose normal is the
-    // opposite of bypass (typical case where the toggle is required).
-    const skipBypass = status && status[this.settingKey] === this.bypassValue;
+    // Determine the value to restore to in Step 3. Default: whatever
+    // obstFromStatus was in pre-flight. Fallback: the configured
+    // normalValue (used only when pre-flight failed and we have no
+    // idea what the original was). The configured normalValue still
+    // exists for users who want to force a specific restore value.
+    const originalValue = status ? status[this.settingKey] : null;
+    const restoreValue = (originalValue !== null && originalValue !== undefined)
+      ? originalValue
+      : this.normalValue;
+
+    // Skip Step 1 if obstFromStatus already matches bypassValue — and
+    // therefore Step 3 too, since restoreValue == bypassValue means
+    // there's nothing to change back. No flash writes at all.
+    const skipBypass = originalValue === this.bypassValue;
     let bypassApplied = false;
 
     try {
@@ -166,12 +182,10 @@ class RatgdoForceCloseAccessory {
         await this.postSetGdo(this.settingKey, this.bypassValue);
         bypassApplied = true;
 
-        // Active poll: wait for ratgdo's HTTP server to be responsive again
-        // before sending the close. The flash write of obstFromStatus crashes
-        // some ratgdo installs — polling here means we wait for ratgdo to
-        // reboot and come back, however long that takes (up to interStepMaxWaitMs),
-        // before issuing the close command (which doesn't trigger another
-        // flash write per ratgdo's helperGarageDoorState).
+        // Active poll: wait for ratgdo to be FULLY ready (HTTP up AND
+        // GDO-comms up — see waitForRatgdoReady for why both matter)
+        // before sending the close. Without this, /setgdo POSTs land
+        // during the GDO-comms-down window and get silently dropped.
         await this.waitForRatgdoReady();
       }
 
@@ -190,19 +204,29 @@ class RatgdoForceCloseAccessory {
         return;
       }
 
-      this.log.info(`Step 3/3: waiting ${this.closeWaitMs}ms then restoring ${this.settingKey} → ${formatVal(this.normalValue)}`);
-      await sleep(this.closeWaitMs);
-      await this.postSetGdoWithRetry(this.settingKey, this.normalValue);
-      bypassApplied = false;
+      // Step 3 only does work if we actually changed the setting in Step 1.
+      // If skipBypass was true, restoreValue == bypassValue (current state
+      // already matches what we want), and re-posting the same value would
+      // trigger an unnecessary flash write. Skip it.
+      if (bypassApplied && restoreValue !== this.bypassValue) {
+        this.log.info(`Step 3/3: waiting ${this.closeWaitMs}ms then restoring ${this.settingKey} → ${formatVal(restoreValue)} (original pre-flight value)`);
+        await sleep(this.closeWaitMs);
+        await this.postSetGdoWithRetry(this.settingKey, restoreValue);
+        bypassApplied = false;
+      } else {
+        this.log.info(`Step 3/3 SKIPPED: ${this.settingKey} did not change in this sequence, nothing to restore`);
+        bypassApplied = false;
+      }
     } finally {
-      // If we changed the setting and didn't restore it (error mid-sequence), try again.
+      // If Step 1 succeeded but we threw before Step 3 finished, restore.
+      // Uses the same pre-flight-original value as the happy path.
       if (bypassApplied) {
-        this.log.warn(`Restoring ${this.settingKey} → ${formatVal(this.normalValue)} after error`);
+        this.log.warn(`Restoring ${this.settingKey} → ${formatVal(restoreValue)} after error`);
         try {
-          await this.postSetGdoWithRetry(this.settingKey, this.normalValue);
+          await this.postSetGdoWithRetry(this.settingKey, restoreValue);
         } catch (err) {
           this.log.error(
-            `CRITICAL: failed to restore ${this.settingKey} to ${formatVal(this.normalValue)}: ${err.message}. ` +
+            `CRITICAL: failed to restore ${this.settingKey} to ${formatVal(restoreValue)}: ${err.message}. ` +
             `Set it manually in the ratgdo web UI.`
           );
         }
@@ -284,35 +308,65 @@ class RatgdoForceCloseAccessory {
     }
   }
 
-  // Probe ratgdo with quick GET /status.json calls until it responds, or
-  // until interStepMaxWaitMs has elapsed. Returns true if ratgdo became
-  // ready, false if the timeout was hit (in which case we proceed anyway —
-  // the caller's POST will surface the real error if ratgdo is genuinely
-  // dead). Probes every 250ms with a 2s per-probe timeout so a stuck
-  // request can't pin us indefinitely.
+  // Probe ratgdo with quick GET /status.json calls until it's FULLY ready
+  // (HTTP up AND GDO comms up), or until interStepMaxWaitMs has elapsed.
+  //
+  // Why "fully ready" matters: the obstFromStatus flash write crashes/reboots
+  // ratgdo on some installs. After the reboot, the HTTP server comes back at
+  // ~12s but the wall-panel / GDO-comms layer (which actually relays the
+  // close to the motor) doesn't recover until ~30s. During that gap,
+  // /status.json returns 200 OK with garageDoorState="Unknown" and any
+  // /setgdo POST is accepted (200 OK) but silently dropped because the
+  // GDO-comms task isn't running yet. We have to wait for a valid door
+  // state before sending Step 2 — otherwise Step 2 disappears into a void.
+  //
+  // Returns true once HTTP + GDO comms are both up, false on timeout.
   async waitForRatgdoReady() {
     const start = Date.now();
     const deadline = start + this.interStepMaxWaitMs;
     const pollIntervalMs = 250;
+    const validStates = ['Open', 'Closed', 'Opening', 'Closing', 'Stopped'];
     let attempts = 0;
+    let httpUpAt = null;
+    let httpUpLogged = false;
+
     while (Date.now() < deadline) {
       attempts++;
       try {
-        await this.httpRequestWithAuth(`${this.ratgdoHost}/status.json`, {
+        const res = await this.httpRequestWithAuth(`${this.ratgdoHost}/status.json`, {
           method: 'GET',
           headers: { 'Connection': 'close' },
           timeoutMs: 2000,
         });
-        if (attempts > 1) {
-          this.log.info(`ratgdo became ready after ${attempts} probes (${Date.now() - start}ms)`);
+
+        let status = null;
+        try { status = JSON.parse(res.body); } catch (e) { /* ignore */ }
+
+        const state = status && status.garageDoorState;
+
+        if (state && validStates.includes(state)) {
+          const total = Date.now() - start;
+          const commsLag = httpUpAt !== null ? (Date.now() - httpUpAt) : 0;
+          if (httpUpAt !== null) {
+            this.log.info(`  → ratgdo fully ready (door=${state}) after ${total}ms (HTTP-up at ${httpUpAt - start}ms, GDO-comms +${commsLag}ms)`);
+          } else if (attempts > 1) {
+            this.log.info(`  → ratgdo ready (door=${state}) after ${attempts} probes (${total}ms)`);
+          }
+          return true;
         }
-        return true;
+
+        if (httpUpAt === null) httpUpAt = Date.now();
+        if (!httpUpLogged) {
+          httpUpLogged = true;
+          this.log.info(`  → HTTP up after ${Date.now() - start}ms but GDO-comms not yet (door=${state || 'no-status'}); continuing to poll`);
+        }
       } catch (err) {
         if (!isTransientConnectionError(err)) throw err;
-        await sleep(pollIntervalMs);
       }
+      await sleep(pollIntervalMs);
     }
-    this.log.warn(`ratgdo not responsive after ${this.interStepMaxWaitMs}ms (${attempts} probes); proceeding anyway`);
+
+    this.log.warn(`ratgdo not fully ready after ${this.interStepMaxWaitMs}ms (${attempts} probes); proceeding anyway — close may be lost`);
     return false;
   }
 
