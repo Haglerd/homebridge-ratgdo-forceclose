@@ -47,16 +47,13 @@ class RatgdoForceCloseAccessory {
     // Cooldown to prevent fat-finger re-trigger
     this.cooldownMs = clampInt(this.config.cooldownMs, 0, 120000, 20000);
 
-    // Pause between Step 1 (set obstFromStatus) and Step 2 (send close).
-    // ratgdo's HTTP handler calls userConfig->save() (NVS flash write) on
-    // every config-change POST; while that write is in flight the firmware
-    // is single-threaded and the HTTP server can be unresponsive — short
-    // back-to-back POSTs at 300ms reliably hit ECONNRESET. 500ms is the
-    // happy-path default that works on a healthy ratgdo; if a particular
-    // run hits a slow flash write, postSetGdoWithRetry catches the resulting
-    // ECONNRESET and retries with another delay — so the worst-case path
-    // is automatic without making everyone pay the longer wait every time.
-    this.interStepDelayMs = clampInt(this.config.interStepDelayMs, 200, 10000, 500);
+    // Maximum time to wait for ratgdo's HTTP server to come back after the
+    // Step 1 obstFromStatus POST. Instead of a fixed sleep, the plugin polls
+    // GET /status.json every 250ms until it responds — proceeds with the
+    // close as soon as ratgdo is ready, no faster, no slower. 15s default
+    // covers the worst case where ratgdo's NVS flash write is slow or the
+    // firmware briefly crashes/restarts after the config change.
+    this.interStepMaxWaitMs = clampInt(this.config.interStepMaxWaitMs, 1000, 60000, 15000);
 
     this.busy = false;
     this.lastFiredAt = 0;
@@ -136,9 +133,10 @@ class RatgdoForceCloseAccessory {
       await this.postSetGdo(this.settingKey, this.bypassValue);
       bypassApplied = true;
 
-      // Wait for ratgdo's NVS flash write from Step 1 to complete before
-      // the close command. See the comment on this.interStepDelayMs above.
-      await sleep(this.interStepDelayMs);
+      // Active poll: probe ratgdo until it's responsive, then send the close.
+      // Replaces the old fixed inter-step sleep — proceeds the moment ratgdo
+      // is back, no faster, no slower. See waitForRatgdoReady() below.
+      await this.waitForRatgdoReady();
 
       this.log.info('Step 2/3: garageDoorState → 0 (close)');
       await this.postSetGdoWithRetry('garageDoorState', 0);
@@ -179,18 +177,50 @@ class RatgdoForceCloseAccessory {
   }
 
   // postSetGdo with one retry on transient connection errors. Use for the
-  // close command (Step 2) — if ratgdo's HTTP server is still busy from the
-  // Step 1 flash write when we POST, we'll see ECONNRESET / ECONNREFUSED.
-  // Wait an extra interStepDelayMs and try once more before giving up.
+  // close command (Step 2) and the restore POST (Step 3 + finally) — if
+  // ratgdo's HTTP server is still busy when we POST, we'll see
+  // ECONNRESET / ECONNREFUSED. Wait for it to come back, then retry once.
   async postSetGdoWithRetry(key, value) {
     try {
       return await this.postSetGdo(key, value);
     } catch (err) {
       if (!isTransientConnectionError(err)) throw err;
-      this.log.warn(`Transient connection error on ${key}=${formatVal(value)} (${err.code || err.message}); waiting ${this.interStepDelayMs}ms then retrying once`);
-      await sleep(this.interStepDelayMs);
+      this.log.warn(`Transient connection error on ${key}=${formatVal(value)} (${err.code || err.message}); waiting for ratgdo to be ready then retrying once`);
+      await this.waitForRatgdoReady();
       return this.postSetGdo(key, value);
     }
+  }
+
+  // Probe ratgdo with quick GET /status.json calls until it responds, or
+  // until interStepMaxWaitMs has elapsed. Returns true if ratgdo became
+  // ready, false if the timeout was hit (in which case we proceed anyway —
+  // the caller's POST will surface the real error if ratgdo is genuinely
+  // dead). Probes every 250ms with a 2s per-probe timeout so a stuck
+  // request can't pin us indefinitely.
+  async waitForRatgdoReady() {
+    const start = Date.now();
+    const deadline = start + this.interStepMaxWaitMs;
+    const pollIntervalMs = 250;
+    let attempts = 0;
+    while (Date.now() < deadline) {
+      attempts++;
+      try {
+        await this.httpRequestWithAuth(`${this.ratgdoHost}/status.json`, {
+          method: 'GET',
+          headers: { 'Connection': 'close' },
+          timeoutMs: 2000,
+        });
+        if (attempts > 1) {
+          this.log.info(`ratgdo became ready after ${attempts} probes (${Date.now() - start}ms)`);
+        }
+        return true;
+      } catch (err) {
+        if (!isTransientConnectionError(err)) throw err;
+        await sleep(pollIntervalMs);
+      }
+    }
+    this.log.warn(`ratgdo not responsive after ${this.interStepMaxWaitMs}ms (${attempts} probes); proceeding anyway`);
+    return false;
   }
 
   // Handles digest auth in case ratgdo's "Require Password" is enabled.

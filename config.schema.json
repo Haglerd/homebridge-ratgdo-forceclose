@@ -65,13 +65,13 @@
         "maximum": 60000,
         "description": "Should comfortably exceed your door's full close duration so the bypass stays in effect until the door is fully shut. The 18000 (18s) default is conservative and works for most residential garage doors; check your ratgdo's status page for closeDuration if you want to tune it."
       },
-      "interStepDelayMs": {
-        "title": "Pause between obstFromStatus toggle and close (ms)",
+      "interStepMaxWaitMs": {
+        "title": "Max wait for ratgdo to be ready between steps (ms)",
         "type": "integer",
-        "default": 500,
-        "minimum": 200,
-        "maximum": 10000,
-        "description": "Delay between Step 1 (set obstFromStatus) and Step 2 (send close). ratgdo writes config to flash on every config-change POST; while it's writing, its HTTP server can be briefly unresponsive. 500ms is the happy-path default — if a particular run hits a slow flash write the plugin auto-retries on ECONNRESET, so you don't pay the long wait on the common path. Tune higher (e.g. 1500ms) only if you see frequent retries in logs."
+        "default": 15000,
+        "minimum": 1000,
+        "maximum": 60000,
+        "description": "After Step 1 (obstFromStatus toggle), the plugin polls GET /status.json every 250ms until ratgdo's HTTP server responds, then immediately sends Step 2 (close). This is a maximum — if ratgdo answers in 200ms, the close fires in 200ms. 15s default covers the worst case where the firmware briefly crashes/restarts after a config-change POST."
       },
       "cooldownMs": {
         "title": "Cooldown between triggers (ms)",
@@ -109,7 +109,7 @@
       "title": "Advanced — timing",
       "expandable": true,
       "expanded": false,
-      "items": ["closeWaitMs", "interStepDelayMs", "cooldownMs"]
+      "items": ["closeWaitMs", "interStepMaxWaitMs", "cooldownMs"]
     }
   ]
 }
