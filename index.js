@@ -53,7 +53,10 @@ class RatgdoForceCloseAccessory {
     // close as soon as ratgdo is ready, no faster, no slower. 15s default
     // covers the worst case where ratgdo's NVS flash write is slow or the
     // firmware briefly crashes/restarts after the config change.
-    this.interStepMaxWaitMs = clampInt(this.config.interStepMaxWaitMs, 1000, 60000, 15000);
+    // Browser testing showed ratgdo can take ~10s to come back after the
+    // obstFromStatus flash write reboots its firmware. 30s default gives
+    // plenty of headroom for slower flash / WiFi reconnect.
+    this.interStepMaxWaitMs = clampInt(this.config.interStepMaxWaitMs, 1000, 60000, 30000);
 
     this.busy = false;
     this.lastFiredAt = 0;
@@ -137,18 +140,8 @@ class RatgdoForceCloseAccessory {
   }
 
   async runForceClose() {
-    // Pre-flight: read ratgdo's current state. We use this to:
-    //   1. Skip the whole sequence if the door is already Closed.
-    //   2. Skip Step 1 if obstFromStatus already matches bypassValue (no
-    //      flash write needed).
-    //   3. Skip Step 3 if obstFromStatus would not change (saves another
-    //      flash write).
-    // Per the homekit-ratgdo32 firmware, the close command itself
-    // (garageDoorState=0) does NOT trigger a flash write — it just calls
-    // close_door() identically to how the native HomeKit close does. Only
-    // the obstFromStatus user-config POST triggers the flash write that's
-    // been crashing ratgdo on some installs. So when the toggle isn't
-    // actually changing state, we should never POST it.
+    // Pre-flight: read ratgdo's current state, used to skip the whole
+    // sequence if the door is already Closed (no work needed).
     const status = await this.getStatusJson();
     if (status) {
       this.log.info(`Pre-flight: door=${status.garageDoorState}, ${this.settingKey}=${status[this.settingKey]}`);
@@ -158,33 +151,49 @@ class RatgdoForceCloseAccessory {
       }
     }
 
+    // Skip Step 1 if obstFromStatus already matches bypassValue (no flash
+    // write needed). Skip Step 3 if it would not change. Helps users whose
+    // permanent state already matches; no-op for users whose normal is the
+    // opposite of bypass (typical case where the toggle is required).
     const skipBypass = status && status[this.settingKey] === this.bypassValue;
-    const skipRestore = status && status[this.settingKey] === this.normalValue;
     let bypassApplied = false;
 
     try {
       if (skipBypass) {
-        this.log.info(`Step 1/3 SKIPPED: ${this.settingKey} already ${formatVal(this.bypassValue)}, no toggle needed`);
+        this.log.info(`Step 1/3 SKIPPED: ${this.settingKey} already ${formatVal(this.bypassValue)}, no flash write needed`);
       } else {
-        this.log.info(`Step 1/3: ${this.settingKey} → ${formatVal(this.bypassValue)}`);
+        this.log.info(`Step 1/3: ${this.settingKey} → ${formatVal(this.bypassValue)} (flash write — ratgdo may briefly become unresponsive)`);
         await this.postSetGdo(this.settingKey, this.bypassValue);
         bypassApplied = true;
-        // Active poll: probe ratgdo until it's responsive, then send the close.
-        // Only needed when we actually triggered a flash write.
+
+        // Active poll: wait for ratgdo's HTTP server to be responsive again
+        // before sending the close. The flash write of obstFromStatus crashes
+        // some ratgdo installs — polling here means we wait for ratgdo to
+        // reboot and come back, however long that takes (up to interStepMaxWaitMs),
+        // before issuing the close command (which doesn't trigger another
+        // flash write per ratgdo's helperGarageDoorState).
         await this.waitForRatgdoReady();
       }
 
-      this.log.info('Step 2/3: garageDoorState → 0 (close)');
+      this.log.info('Step 2/3: garageDoorState → 0 (close — no flash write)');
       await this.postSetGdoWithRetry('garageDoorState', 0);
 
-      if (skipRestore && !bypassApplied) {
-        this.log.info(`Step 3/3 SKIPPED: ${this.settingKey} already at restore value ${formatVal(this.normalValue)}`);
-      } else {
-        this.log.info(`Step 3/3: waiting ${this.closeWaitMs}ms then restoring ${this.settingKey} → ${formatVal(this.normalValue)}`);
-        await sleep(this.closeWaitMs);
-        await this.postSetGdoWithRetry(this.settingKey, this.normalValue);
-        bypassApplied = false;
+      // Verify the close actually started. ratgdo's response of 200 OK only
+      // confirms the HTTP request was received — the close itself happens
+      // after a 5s TTC delay and the firmware can crash mid-sequence
+      // without the door ever moving. Poll garageDoorState for the
+      // Open → Closing/Closed transition (typically arrives ~5s after the
+      // POST due to TTC). If we don't see it within 10s, something's wrong.
+      const closeStarted = await this.verifyCloseStarted();
+      if (!closeStarted) {
+        this.log.error(`CRITICAL: door state never transitioned to Closing after POST 200. Close was lost (likely ratgdo firmware crash mid-close). Skipping Step 3 to avoid leaving in inconsistent state — restore ${this.settingKey} manually if needed.`);
+        return;
       }
+
+      this.log.info(`Step 3/3: waiting ${this.closeWaitMs}ms then restoring ${this.settingKey} → ${formatVal(this.normalValue)}`);
+      await sleep(this.closeWaitMs);
+      await this.postSetGdoWithRetry(this.settingKey, this.normalValue);
+      bypassApplied = false;
     } finally {
       // If we changed the setting and didn't restore it (error mid-sequence), try again.
       if (bypassApplied) {
@@ -199,6 +208,33 @@ class RatgdoForceCloseAccessory {
         }
       }
     }
+  }
+
+  // After Step 2 (close POST), verify the door actually starts closing by
+  // polling garageDoorState for the Open → Closing/Closed transition.
+  // ratgdo's 200 OK only confirms the HTTP request was received; the actual
+  // close happens later (5s TTC + close cycle), and the firmware can crash
+  // between those two events without the door ever moving. Returns true if
+  // we observed the transition, false if it never happened in the window.
+  async verifyCloseStarted() {
+    const start = Date.now();
+    const maxWaitMs = 10000;
+    const probeIntervalMs = 500;
+    while (Date.now() - start < maxWaitMs) {
+      try {
+        const status = await this.getStatusJson();
+        if (!status) {
+          await sleep(probeIntervalMs);
+          continue;
+        }
+        if (status.garageDoorState === 'Closing' || status.garageDoorState === 'Closed') {
+          this.log.info(`  → ratgdo confirms door is ${status.garageDoorState} (after ${Date.now() - start}ms)`);
+          return true;
+        }
+      } catch (err) { /* keep probing */ }
+      await sleep(probeIntervalMs);
+    }
+    return false;
   }
 
   // Read ratgdo's /status.json. Used by the pre-flight check to decide
