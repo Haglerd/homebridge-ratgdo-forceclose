@@ -201,6 +201,8 @@ The setting being toggled (`obstFromStatus`) corresponds to the **"Get obstructi
 
 - **Cooldown active error.** You tapped the switch too soon after the previous tap. Wait for the configured `cooldownMs` to elapse. Default is 20 seconds.
 
+- **HomeKit Home app still shows "Open" after a successful Force Close.** The door is actually closed — ratgdo updates its `target_door_state` HomeKit characteristic correctly when our plugin issues the close, but iOS Home app aggressively caches accessory state and doesn't always refresh the UI when changes come from outside HomeKit's command path (i.e., from the plugin's HTTP POST instead of a tap on the regular ratgdo tile). To force a refresh: pull down on the room view in the Home app, or kill and reopen the app. This is an iOS Home app limitation, not a plugin or ratgdo firmware bug. Verified by checking ratgdo's internal log — `Door state changing from Closing to Closed (target Closed)` confirms the notify path fired, the iOS UI just hadn't pulled the update.
+
 ## Releasing (maintainer notes)
 
 Releases are published to npm automatically by [`.github/workflows/publish.yml`](.github/workflows/publish.yml) when a tag matching `v*` is pushed. To cut a release:
