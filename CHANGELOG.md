@@ -2,6 +2,15 @@
 
 All notable changes to this plugin are documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] — 2026-04-30
+
+### Fixed
+
+- **HTTP timeout errors weren't being classified as transient/retryable**, which broke the active-polling recovery added in v1.0.2. The `httpRequest()` timeout handler created a plain `Error` with the message "request timed out after Nms" but no `.code` property; `isTransientConnectionError()` checked `err.code` first (no match) and then a regex against the message for `/etimedout/i`, which didn't match the literal text "timed out". So `waitForRatgdoReady()` and `postSetGdoWithRetry()` bailed on the first timeout instead of looping. Two-line fix:
+  - `httpRequest()` timeout handler now sets `err.code = 'ETIMEDOUT'` on the rejected error.
+  - `isTransientConnectionError()` regex now also matches `/timed.?out/i` as a belt-and-suspenders for any future error path that throws a plain timeout message without a code.
+- After update: timeouts during the inter-step probe will now correctly trigger the active-poll retry loop instead of failing the whole sequence.
+
 ## [1.0.2] — 2026-04-30
 
 ### Fixed
@@ -45,6 +54,7 @@ Initial public release on npm.
 - **CI workflow** (`.github/workflows/ci.yml`) — runs `node --check` and JSON validation on every PR.
 - **Tag-triggered npm publish workflow** (`.github/workflows/publish.yml`) using npm Trusted Publishing (OIDC) — no long-lived secrets.
 
+[1.0.3]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.0.3
 [1.0.2]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.0.2
 [1.0.1]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.0.1
 [1.0.0]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.0.0

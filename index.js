@@ -272,7 +272,9 @@ function isTransientConnectionError(err) {
   const code = err.code || '';
   if (code === 'ECONNRESET' || code === 'ECONNREFUSED' || code === 'ETIMEDOUT' || code === 'EPIPE') return true;
   const msg = String(err.message || '');
-  return /econnreset|econnrefused|etimedout|epipe/i.test(msg);
+  // Belt-and-suspenders: also catch error messages that don't carry a code,
+  // including our own httpRequest "request timed out after Nms" string.
+  return /econnreset|econnrefused|etimedout|epipe|timed.?out/i.test(msg);
 }
 
 function formatVal(v) {
@@ -319,7 +321,14 @@ function httpRequest(urlStr, { method = 'GET', headers = {}, body = null, timeou
       });
     });
     req.on('error', reject);
-    req.on('timeout', () => req.destroy(new Error(`request timed out after ${timeoutMs}ms`)));
+    req.on('timeout', () => {
+      // Tag the error with .code = 'ETIMEDOUT' so isTransientConnectionError
+      // classifies it as retryable (without this, the timeout was a plain
+      // Error and the active poll bailed instead of looping).
+      const e = new Error(`request timed out after ${timeoutMs}ms`);
+      e.code = 'ETIMEDOUT';
+      req.destroy(e);
+    });
     if (body != null) req.write(body);
     req.end();
   });
