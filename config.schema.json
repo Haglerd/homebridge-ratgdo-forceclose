@@ -58,12 +58,26 @@
         "description": "FALLBACK ONLY. The plugin reads the current obstFromStatus value during pre-flight and restores back to whatever was there — so under normal operation this field is unused. It's only consulted if the pre-flight status read fails entirely (rare). Leave at the default unless you know your pre-flight reads are unreliable."
       },
       "closeWaitMs": {
-        "title": "Wait between close and restore (ms)",
+        "title": "Max wait for door to reach Closed (ms)",
         "type": "integer",
         "default": 60000,
         "minimum": 1000,
         "maximum": 180000,
-        "description": "How long to wait after the close POST before restoring obstFromStatus. Should be long enough for the door to physically finish closing AND for ratgdo's firmware to fully settle, because the restore POST also writes to flash (which can crash ratgdo a second time). 60s default = ~12s for the door + ~48s settle. Bump higher if you see restore POSTs failing in logs."
+        "description": "Upper bound on the time between Step 2 (close POST) and Step 3 (restore POST). The plugin polls garageDoorState every 500ms and proceeds as soon as the door reaches `Closed` — so this is a CEILING, not a fixed sleep. 60s default covers a typical 12s close cycle plus margin for slower doors or temporary status read failures."
+      },
+      "postCloseSettleMs": {
+        "title": "Settle time after Closed before restore (ms)",
+        "type": "integer",
+        "default": 8000,
+        "minimum": 0,
+        "maximum": 60000,
+        "description": "After the door confirms Closed, the plugin waits this long before firing the Step 3 restore POST. Gives ratgdo's firmware a moment to settle before another flash-write that may crash/reboot it. 8s default; lower for snappier sequences, higher if you see restore POSTs failing."
+      },
+      "bundleTtcZero": {
+        "title": "Bundle TTCseconds=0 with obstFromStatus flash",
+        "type": "boolean",
+        "default": true,
+        "description": "When ON, the plugin temporarily sets ratgdo's TTCseconds (warning beep before close) to 0 in the SAME flash POST as the obstFromStatus toggle, then restores the original TTC in the same Step 3 flash POST. Costs zero extra reboots (ratgdo's setgdo handler bundles multiple keys into one flash save) but skips the ~5–10s warning-beep window so the close fires instantly after Step 2. Turn OFF only if you specifically want the warning beep during force-close."
       },
       "interStepMaxWaitMs": {
         "title": "Max wait for ratgdo to be ready between steps (ms)",
@@ -109,7 +123,7 @@
       "title": "Advanced — timing",
       "expandable": true,
       "expanded": false,
-      "items": ["closeWaitMs", "interStepMaxWaitMs", "cooldownMs"]
+      "items": ["closeWaitMs", "postCloseSettleMs", "interStepMaxWaitMs", "cooldownMs", "bundleTtcZero"]
     }
   ]
 }

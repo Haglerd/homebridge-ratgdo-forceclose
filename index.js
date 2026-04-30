@@ -40,13 +40,28 @@ class RatgdoForceCloseAccessory {
     this.bypassValue = this.config.bypassValue !== undefined ? this.config.bypassValue : true;
     this.normalValue = this.config.normalValue !== undefined ? this.config.normalValue : false;
 
-    // How long the bypass setting stays in effect after the close command.
-    // Two reasons this should be generous: (a) the door has to physically
-    // finish closing (~12s for a typical residential door), and (b) the
-    // restore POST writes to flash and can crash/reboot ratgdo a SECOND
-    // time, so we want the door fully shut and the firmware settled before
-    // we kick it again. 60s default = ~12s close + ~48s settle.
+    // Maximum time from Step 2 POST to Step 3 fire. v1.0.5 polls
+    // garageDoorState until it reads `Closed`, then waits postCloseSettleMs
+    // before Step 3 — so closeWaitMs is now an upper bound, not a fixed
+    // sleep. The actual time is door-physical-close (~12s) + settle.
     this.closeWaitMs = clampInt(this.config.closeWaitMs, 1000, 180000, 60000);
+
+    // Small fixed wait after the door is observed Closed but before the
+    // Step 3 restore POST. Gives ratgdo a moment to settle before we hit
+    // it with another flash-write that may crash/reboot it. 8s default
+    // is conservative; lower means a snappier overall sequence.
+    this.postCloseSettleMs = clampInt(this.config.postCloseSettleMs, 0, 60000, 8000);
+
+    // Bundle TTCseconds=0 into the same flash POST as the obstFromStatus
+    // toggle, then restore the original TTC during the bundled Step 3.
+    // ratgdo's TTC is a "warning beep before close" delay (typically
+    // 5–10s). When set to 0, the close fires instantly after Step 2,
+    // saving the full TTC window per force-close. Bundled into the same
+    // flash save so it costs zero extra reboots — one flash for setup,
+    // one for restore, identical to the v1.0.4 sequence. Disable only
+    // if you want the warning beep during force-close (e.g. for safety
+    // when you can't see the door).
+    this.bundleTtcZero = this.config.bundleTtcZero !== false;
 
     // Cooldown to prevent fat-finger re-trigger
     this.cooldownMs = clampInt(this.config.cooldownMs, 0, 120000, 20000);
@@ -77,7 +92,7 @@ class RatgdoForceCloseAccessory {
       .setCharacteristic(Characteristic.Manufacturer, 'DIY')
       .setCharacteristic(Characteristic.Model, 'Ratgdo Force Close')
       .setCharacteristic(Characteristic.SerialNumber, this.name.replace(/\s+/g, '-'))
-      .setCharacteristic(Characteristic.FirmwareRevision, '1.0.4');
+      .setCharacteristic(Characteristic.FirmwareRevision, '1.0.5');
 
     this.switchService = new Service.Switch(this.name);
     this.switchService
@@ -90,9 +105,10 @@ class RatgdoForceCloseAccessory {
     }
 
     this.log.info(
-      `[${this.name}] On tap: pre-flight read → POST ${this.settingKey}=${formatVal(this.bypassValue)} (if needed) → ` +
-      `POST garageDoorState=0 → wait ${this.closeWaitMs}ms → ` +
-      `POST ${this.settingKey}=<original pre-flight value> (if changed)`
+      `[${this.name}] On tap: pre-flight read → POST ${this.settingKey}=${formatVal(this.bypassValue)}` +
+      `${this.bundleTtcZero ? '+TTCseconds=0' : ''} (if needed) → POST garageDoorState=0 → ` +
+      `poll for Closed (max ${this.closeWaitMs}ms) → settle ${this.postCloseSettleMs}ms → ` +
+      `POST ${this.settingKey}=<original>${this.bundleTtcZero ? '+TTCseconds=<original>' : ''} (if changed)`
     );
   }
 
@@ -142,96 +158,140 @@ class RatgdoForceCloseAccessory {
   }
 
   async runForceClose() {
-    // Pre-flight: read ratgdo's current state. We use this for two things:
+    // Pre-flight: read ratgdo's current state. We use it for:
     //  1. Skip the whole sequence if the door is already Closed.
-    //  2. Capture the ORIGINAL value of obstFromStatus, so Step 3 can
-    //     restore it to whatever it was before the user tapped the
-    //     switch — instead of a hard-coded config value. If the user's
-    //     normal state is false, we restore to false; if it's true, we
-    //     restore to true (which would also have skipped Step 1).
+    //  2. Capture original obstFromStatus so Step 3 restores to it.
+    //  3. Capture original TTCseconds so Step 3 restores to it (when
+    //     bundleTtcZero is enabled — see runtime config).
     const status = await this.getStatusJson();
     if (status) {
-      this.log.info(`Pre-flight: door=${status.garageDoorState}, ${this.settingKey}=${status[this.settingKey]}`);
+      const ttcLog = (typeof status.TTCseconds === 'number') ? `, TTCseconds=${status.TTCseconds}` : '';
+      this.log.info(`Pre-flight: door=${status.garageDoorState}, ${this.settingKey}=${status[this.settingKey]}${ttcLog}`);
       if (status.garageDoorState === 'Closed') {
         this.log.info('Door already closed. Nothing to do.');
         return;
       }
     }
 
-    // Determine the value to restore to in Step 3. Default: whatever
-    // obstFromStatus was in pre-flight. Fallback: the configured
-    // normalValue (used only when pre-flight failed and we have no
-    // idea what the original was). The configured normalValue still
-    // exists for users who want to force a specific restore value.
     const originalValue = status ? status[this.settingKey] : null;
     const restoreValue = (originalValue !== null && originalValue !== undefined)
       ? originalValue
       : this.normalValue;
 
-    // Skip Step 1 if obstFromStatus already matches bypassValue — and
-    // therefore Step 3 too, since restoreValue == bypassValue means
-    // there's nothing to change back. No flash writes at all.
+    // Bundle TTCseconds=0 into the flash POST when (a) the user opted in
+    // (default true) AND (b) we have a pre-flight TTC reading we can
+    // restore later AND (c) it's not already 0 (no need to bundle a no-op).
+    // /setgdo handles multiple keys in one POST and only flashes ONCE,
+    // so adding TTCseconds=0 to the obstFromStatus POST costs zero extra
+    // reboots — but skips the ~5–10s warning-beep window that delays
+    // every close-confirmation in the v1.0.4 logs.
+    const originalTtc = (status && typeof status.TTCseconds === 'number') ? status.TTCseconds : null;
+    const willBundleTtc = this.bundleTtcZero && originalTtc !== null && originalTtc !== 0;
+
+    // Skip Step 1 entirely if obstFromStatus already matches bypassValue.
+    // No flash, no reboot, no TTC change either — the existing TTC
+    // governs how fast the close confirms. Tell the user if the win
+    // is being left on the table.
     const skipBypass = originalValue === this.bypassValue;
-    let bypassApplied = false;
+    let flashApplied = false;
 
     try {
       if (skipBypass) {
         this.log.info(`Step 1/3 SKIPPED: ${this.settingKey} already ${formatVal(this.bypassValue)}, no flash write needed`);
+        if (this.bundleTtcZero && originalTtc !== null && originalTtc !== 0) {
+          this.log.info(`  (TTC bundling skipped too — would cost a flash reboot just to disable the ${originalTtc}s warning beep. Set TTCseconds=0 permanently in ratgdo web UI to speed up skip-Step-1 taps.)`);
+        }
       } else {
-        this.log.info(`Step 1/3: ${this.settingKey} → ${formatVal(this.bypassValue)} (flash write — ratgdo may briefly become unresponsive)`);
-        await this.postSetGdo(this.settingKey, this.bypassValue);
-        bypassApplied = true;
+        const pairs = { [this.settingKey]: this.bypassValue };
+        if (willBundleTtc) pairs.TTCseconds = 0;
+        this.log.info(`Step 1/3: ${describePairs(pairs)} (flash write — ratgdo may briefly become unresponsive)`);
+        await this.postSetGdoMulti(pairs);
+        flashApplied = true;
 
-        // Active poll: wait for ratgdo to be FULLY ready (HTTP up AND
-        // GDO-comms up — see waitForRatgdoReady for why both matter)
-        // before sending the close. Without this, /setgdo POSTs land
-        // during the GDO-comms-down window and get silently dropped.
+        // Wait for ratgdo to be FULLY ready (HTTP up AND GDO-comms back —
+        // garageDoorState != "Unknown") before sending the close.
         await this.waitForRatgdoReady();
       }
 
       this.log.info('Step 2/3: garageDoorState → 0 (close — no flash write)');
       await this.postSetGdoWithRetry('garageDoorState', 0);
 
-      // Verify the close actually started. ratgdo's response of 200 OK only
-      // confirms the HTTP request was received — the close itself happens
-      // after a 5s TTC delay and the firmware can crash mid-sequence
-      // without the door ever moving. Poll garageDoorState for the
-      // Open → Closing/Closed transition (typically arrives ~5s after the
-      // POST due to TTC). If we don't see it within 10s, something's wrong.
+      // Verify the close actually started — ratgdo's 200 OK only confirms
+      // the HTTP request landed; the firmware can crash mid-sequence
+      // without the door ever moving. With TTC bundled to 0 this should
+      // confirm in <2s instead of ~8s.
       const closeStarted = await this.verifyCloseStarted();
       if (!closeStarted) {
-        this.log.error(`CRITICAL: door state never transitioned to Closing after POST 200. Close was lost (likely ratgdo firmware crash mid-close). Skipping Step 3 to avoid leaving in inconsistent state — restore ${this.settingKey} manually if needed.`);
+        this.log.error(`CRITICAL: door state never transitioned to Closing after POST 200. Close was lost (likely ratgdo firmware crash mid-close). Skipping Step 3 to avoid leaving in inconsistent state — restore manually if needed.`);
         return;
       }
 
-      // Step 3 only does work if we actually changed the setting in Step 1.
-      // If skipBypass was true, restoreValue == bypassValue (current state
-      // already matches what we want), and re-posting the same value would
-      // trigger an unnecessary flash write. Skip it.
-      if (bypassApplied && restoreValue !== this.bypassValue) {
-        this.log.info(`Step 3/3: waiting ${this.closeWaitMs}ms then restoring ${this.settingKey} → ${formatVal(restoreValue)} (original pre-flight value)`);
-        await sleep(this.closeWaitMs);
-        await this.postSetGdoWithRetry(this.settingKey, restoreValue);
-        bypassApplied = false;
+      // Active wait for door to actually finish closing, instead of a
+      // fixed sleep. Polls garageDoorState until "Closed" is observed,
+      // capped by closeWaitMs. Then a small postCloseSettleMs gives
+      // ratgdo a moment before we hit it with the restore flash POST.
+      const closedConfirmed = await this.waitForDoorClosed();
+      if (closedConfirmed) {
+        this.log.info(`  → settling ${this.postCloseSettleMs}ms before restore POST`);
+        await sleep(this.postCloseSettleMs);
       } else {
-        this.log.info(`Step 3/3 SKIPPED: ${this.settingKey} did not change in this sequence, nothing to restore`);
-        bypassApplied = false;
+        this.log.warn(`  → door did not confirm Closed within ${this.closeWaitMs}ms; proceeding with restore anyway`);
+      }
+
+      // Step 3: bundled restore (only if we actually flashed in Step 1).
+      // restoreValue == bypassValue would be a no-op rewrite, so skip.
+      if (flashApplied && restoreValue !== this.bypassValue) {
+        const pairs = { [this.settingKey]: restoreValue };
+        if (willBundleTtc) pairs.TTCseconds = originalTtc;
+        this.log.info(`Step 3/3: ${describePairs(pairs)} (bundled flash write — restoring pre-flight values)`);
+        await this.postSetGdoWithRetry(this.settingKey, restoreValue, willBundleTtc ? { TTCseconds: originalTtc } : null);
+        flashApplied = false;
+      } else {
+        this.log.info(`Step 3/3 SKIPPED: nothing changed in this sequence, nothing to restore`);
+        flashApplied = false;
       }
     } finally {
-      // If Step 1 succeeded but we threw before Step 3 finished, restore.
-      // Uses the same pre-flight-original value as the happy path.
-      if (bypassApplied) {
-        this.log.warn(`Restoring ${this.settingKey} → ${formatVal(restoreValue)} after error`);
+      // If Step 1's flash succeeded but we threw before Step 3 finished,
+      // restore — using the same bundled pre-flight values.
+      if (flashApplied) {
+        const pairs = { [this.settingKey]: restoreValue };
+        if (willBundleTtc) pairs.TTCseconds = originalTtc;
+        this.log.warn(`Restoring ${describePairs(pairs)} after error`);
         try {
-          await this.postSetGdoWithRetry(this.settingKey, restoreValue);
+          await this.postSetGdoWithRetry(this.settingKey, restoreValue, willBundleTtc ? { TTCseconds: originalTtc } : null);
         } catch (err) {
           this.log.error(
-            `CRITICAL: failed to restore ${this.settingKey} to ${formatVal(restoreValue)}: ${err.message}. ` +
-            `Set it manually in the ratgdo web UI.`
+            `CRITICAL: failed to restore ${describePairs(pairs)}: ${err.message}. ` +
+            `Set them manually in the ratgdo web UI.`
           );
         }
       }
     }
+  }
+
+  // Active wait for door to reach `Closed` state, capped by closeWaitMs.
+  // Replaces the v1.0.4 fixed-sleep approach — fires Step 3 as soon as
+  // the door is actually shut, instead of after a worst-case sleep.
+  async waitForDoorClosed() {
+    const start = Date.now();
+    const deadline = start + this.closeWaitMs;
+    const probeIntervalMs = 500;
+    let lastLoggedState = null;
+    while (Date.now() < deadline) {
+      try {
+        const status = await this.getStatusJson();
+        if (status && status.garageDoorState !== lastLoggedState) {
+          lastLoggedState = status.garageDoorState;
+          this.log.info(`  → ${Math.floor((Date.now() - start) / 1000)}s: door=${status.garageDoorState}`);
+        }
+        if (status && status.garageDoorState === 'Closed') {
+          this.log.info(`  → ratgdo confirms door is Closed (after ${Date.now() - start}ms)`);
+          return true;
+        }
+      } catch (err) { /* keep probing */ }
+      await sleep(probeIntervalMs);
+    }
+    return false;
   }
 
   // After Step 2 (close POST), verify the door actually starts closing by
@@ -279,8 +339,19 @@ class RatgdoForceCloseAccessory {
   }
 
   async postSetGdo(key, value) {
+    return this.postSetGdoMulti({ [key]: value });
+  }
+
+  // POST multiple key=value pairs to /setgdo in a single request. ratgdo's
+  // setgdo handler iterates server.args() and only calls ESP8266_SAVE_CONFIG()
+  // ONCE at the end of the loop (verified in homekit-ratgdo32 web.cpp), so
+  // bundling obstFromStatus and TTCseconds in one POST = one flash save =
+  // one reboot, instead of two flashes / two reboots.
+  async postSetGdoMulti(pairs) {
     const url = `${this.ratgdoHost}/setgdo`;
-    const body = `${encodeURIComponent(key)}=${encodeURIComponent(formatVal(value))}`;
+    const body = Object.entries(pairs)
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(formatVal(v))}`)
+      .join('&');
     return this.httpRequestWithAuth(url, {
       method: 'POST',
       headers: {
@@ -293,18 +364,18 @@ class RatgdoForceCloseAccessory {
     });
   }
 
-  // postSetGdo with one retry on transient connection errors. Use for the
-  // close command (Step 2) and the restore POST (Step 3 + finally) — if
-  // ratgdo's HTTP server is still busy when we POST, we'll see
-  // ECONNRESET / ECONNREFUSED. Wait for it to come back, then retry once.
-  async postSetGdoWithRetry(key, value) {
+  // postSetGdo with one retry on transient connection errors. Used for
+  // Step 2 (close) and the bundled restore POST. Optional `extraPairs`
+  // object lets the restore call also bundle TTCseconds in the same flash.
+  async postSetGdoWithRetry(key, value, extraPairs) {
+    const pairs = extraPairs ? { [key]: value, ...extraPairs } : { [key]: value };
     try {
-      return await this.postSetGdo(key, value);
+      return await this.postSetGdoMulti(pairs);
     } catch (err) {
       if (!isTransientConnectionError(err)) throw err;
-      this.log.warn(`Transient connection error on ${key}=${formatVal(value)} (${err.code || err.message}); waiting for ratgdo to be ready then retrying once`);
+      this.log.warn(`Transient connection error on ${describePairs(pairs)} (${err.code || err.message}); waiting for ratgdo to be ready then retrying once`);
       await this.waitForRatgdoReady();
-      return this.postSetGdo(key, value);
+      return this.postSetGdoMulti(pairs);
     }
   }
 
@@ -456,6 +527,10 @@ function isTransientConnectionError(err) {
 function formatVal(v) {
   if (typeof v === 'boolean') return v ? 'true' : 'false';
   return String(v);
+}
+
+function describePairs(pairs) {
+  return Object.entries(pairs).map(([k, v]) => `${k}=${formatVal(v)}`).join(', ');
 }
 
 function truncate(s, n) {
