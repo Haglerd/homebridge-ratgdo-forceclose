@@ -1,7 +1,7 @@
 {
   "name": "homebridge-ratgdo-forceclose",
   "displayName": "Ratgdo Force Close",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "HomeKit momentary switch for ratgdo-controlled garage doors that bypasses sun-glare-induced false obstructions. Toggles ratgdo's obstruction-from-status setting, sends close, then restores the setting.",
   "main": "index.js",
   "engines": {
