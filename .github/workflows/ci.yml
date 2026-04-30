@@ -1,0 +1,55 @@
+name: CI
+
+# Lightweight sanity checks on every PR and every push to main.
+# Goal: catch syntax breaks, broken JSON, and obvious package-config issues
+# before they land. Mirrors the in-publish-workflow checks so PR authors
+# don't have to wait until release time to find out something's wrong.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  sanity:
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Run on Node 18, 20, and 22 — the package.json engines field declares
+      # >=18, so all three should pass. Catches accidental use of newer-Node
+      # syntax or APIs that wouldn't run on a Pi still on Node 18 LTS.
+      matrix:
+        node-version: ['18', '20', '22']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: index.js parses
+        run: node --check index.js
+
+      - name: package.json is valid JSON
+        run: node -e "JSON.parse(require('fs').readFileSync('package.json','utf8'))"
+
+      - name: config.schema.json is valid JSON
+        run: node -e "JSON.parse(require('fs').readFileSync('config.schema.json','utf8'))"
+
+      - name: package.json declares the homebridge-plugin keyword
+        # Required by Homebridge for the UI to discover this as a plugin.
+        # If someone removes it accidentally, the plugin disappears from search.
+        run: |
+          node -e "
+          const pkg = require('./package.json');
+          const kw = pkg.keywords || [];
+          if (!kw.includes('homebridge-plugin')) {
+            console.error('::error::package.json keywords must include \"homebridge-plugin\"');
+            process.exit(1);
+          }
+          console.log('homebridge-plugin keyword present ✓');
+          "

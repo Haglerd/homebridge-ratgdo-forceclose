@@ -1,14 +1,38 @@
+<p align="center">
+<img src="https://github.com/homebridge/branding/raw/latest/logos/homebridge-wordmark-logo-vertical.png" width="150">
+</p>
+
+<p align="center">
+
 # homebridge-ratgdo-forceclose
+
+</p>
 
 A Homebridge plugin that adds a momentary "Force Close" switch for [ratgdo](https://paulwieland.github.io/ratgdo/)-controlled garage doors, for cases when sun glare on the photo eye blocks normal HomeKit close.
 
+<p align="center">
+
+[![npm version](https://img.shields.io/npm/v/homebridge-ratgdo-forceclose?color=blue)](https://www.npmjs.com/package/homebridge-ratgdo-forceclose)
+[![npm downloads](https://img.shields.io/npm/dt/homebridge-ratgdo-forceclose?color=blue)](https://www.npmjs.com/package/homebridge-ratgdo-forceclose)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+</p>
 
 ## What this is
 
 A Homebridge accessory plugin that exposes a single momentary switch in HomeKit. On tap, it tells your ratgdo to ignore the obstruction sensor pin (briefly), sends the close command, waits for the door to finish closing, and then restores the original setting. The plugin uses ratgdo's existing `/setgdo` HTTP endpoint — no firmware modifications required.
 
-It's not a replacement for HomeKit's normal garage-door integration. You should still use the regular ratgdo plugin (or HomeKit's native ratgdo support) for everyday open/close. This plugin only exists for the situation where the door **won't** close because the obstruction sensor is being false-tripped.
+It's not a replacement for HomeKit's normal garage-door integration. For everyday open/close, use [`homebridge-ratgdo`](https://github.com/hjdhjd/homebridge-ratgdo) (the full-featured ratgdo plugin) or HomeKit's native ratgdo support. **This plugin only exists for the situation where the door won't close because the obstruction sensor is being false-tripped** — typically by direct sun on the photo eye receiver.
+
+## What this plugin does NOT do
+
+To set expectations clearly:
+
+- **It does not open or close the door under normal conditions.** Use the regular ratgdo plugin for that. This plugin's switch only does the force-close sequence; it doesn't do anything on tap when the obstruction sensor isn't being false-tripped (the close still works, but the obstruction-bypass step is wasted motion).
+- **It does not expose ratgdo's other HomeKit accessories** — no obstruction sensor, no motion sensor, no light control, no lockout switch. Those are all in the regular ratgdo plugin.
+- **It does not work with ESPHome ratgdo firmware.** This plugin requires the `homekit-ratgdo` / `homekit-ratgdo32` firmware which exposes the `POST /setgdo` HTTP endpoint. ESPHome ratgdo uses a different protocol (ESPHome native API + SSE events). For ESPHome firmware, use [`homebridge-ratgdo-esphome`](https://github.com/BMDan/homebridge-ratgdo-esphome) or [`homebridge-ratgdo`](https://github.com/hjdhjd/homebridge-ratgdo) (which supports both).
+- **It does not auto-discover ratgdo devices.** You configure one accessory per door with the IP/host explicitly. (Most homes have one garage door; this is fine.)
+- **It does not work over the cloud.** Plugin → ratgdo communication is local-network only. (HomeKit access from outside your network still works via your HomeKit hub — Apple TV / HomePod / iPad — like any other HomeKit accessory.)
 
 ## Two ways to use this
 
@@ -29,10 +53,17 @@ The traditional workaround is to walk to the garage and **hold** the wall contro
 
 ## Compatibility
 
-- Works with any ratgdo running [homekit-ratgdo](https://paulwieland.github.io/ratgdo/) or [homekit-ratgdo32](https://github.com/sonic1015/homekit-ratgdo32) firmware that exposes the `/setgdo` HTTP endpoint and the `obstFromStatus` setting.
-- Tested on Security+ 1.0 with homekit-ratgdo32 v3.4.4.
+**Firmware** — this plugin requires `homekit-ratgdo` family firmware:
+
+- ✅ [homekit-ratgdo](https://paulwieland.github.io/ratgdo/) (Paul Wieland's HomeKit-aware ESP firmware)
+- ✅ [homekit-ratgdo32](https://github.com/sonic1015/homekit-ratgdo32) (the ESP32 fork)
+- ❌ [esphome-ratgdo](https://ratgdo.github.io/esphome-ratgdo/) — **not supported.** ESPHome firmware does not expose the `POST /setgdo` HTTP endpoint this plugin uses. For ESPHome firmware, use [`homebridge-ratgdo-esphome`](https://github.com/BMDan/homebridge-ratgdo-esphome) or [`homebridge-ratgdo`](https://github.com/hjdhjd/homebridge-ratgdo).
+
+**Garage-door opener** — works with any ratgdo-compatible opener:
+- Tested on Liftmaster Security+ 1.0 with homekit-ratgdo32 v3.4.4.
 - Should work on Security+ 2.0 too but has not been verified.
-- Requires Homebridge 1.6+ and Node.js 18+.
+
+**Runtime** — Homebridge 1.6+ and Node.js 18+.
 
 ## Safety warning
 
@@ -59,22 +90,23 @@ If you already run Homebridge, the plugin is the cleaner integration. If you don
 
 ## Installation
 
-### Method 1 — Homebridge UI (recommended)
+> **Tip:** Run this plugin as a **child bridge** if your Homebridge UI supports it (most modern setups do). Right-click the plugin in the Plugins tab and choose **Bridge Settings → Run as a Child Bridge**. This isolates the plugin in its own process so a config error or crash can't take down everything else on your bridge. Recommended by the Homebridge maintainers for any plugin that talks to a network device.
 
-If you use the Homebridge Config UI X, you can install directly from GitHub without dropping to the shell:
+### Method 1 — Homebridge UI (recommended)
 
 1. Open the Homebridge UI in your browser.
 2. Go to the **Plugins** tab.
-3. Open the search bar's three-dot menu and choose **Install `[email protected]:Haglerd/homebridge-ratgdo-forceclose`** (or paste the GitHub URL in the search box if your UI version supports URL search).
+3. Search for `homebridge-ratgdo-forceclose` (or use the search bar's three-dot menu → **Install Plugin** and paste the package name).
 4. Once installed, click the plugin's **Settings** (cog) icon and fill in `ratgdoHost` (and `username` / `password` if your ratgdo requires auth).
-5. Save, then restart the child bridge (or Homebridge itself) using the prompt at the top of the UI.
+5. (Recommended) right-click the plugin tile → **Bridge Settings** → toggle **Run as a Child Bridge**.
+6. Save, then restart the child bridge (or Homebridge itself) using the prompt at the top of the UI.
 
 After restart, the **Force Close Garage** switch appears in the Home app under the Homebridge bridge.
 
-### Method 2 — Install directly from GitHub via CLI
+### Method 2 — Install via npm CLI
 
 ```bash
-sudo npm install -g github:Haglerd/homebridge-ratgdo-forceclose
+sudo npm install -g homebridge-ratgdo-forceclose
 sudo hb-service restart
 ```
 
@@ -89,8 +121,8 @@ sudo hb-service restart
 
 ### Updating
 
-- **Via Homebridge UI:** Plugins tab → click the plugin's **Update** button when one is available. The UI re-fetches the latest from GitHub.
-- **Via CLI:** `sudo npm update -g homebridge-ratgdo-forceclose && sudo hb-service restart`. If you installed via Method 2, npm will pull the latest from the GitHub URL recorded in the install metadata.
+- **Via Homebridge UI:** Plugins tab → click the plugin's **Update** button when one is available.
+- **Via CLI:** `sudo npm update -g homebridge-ratgdo-forceclose && sudo hb-service restart`.
 
 ## Configuration
 
