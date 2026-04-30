@@ -1,0 +1,74 @@
+name: Publish to npm
+
+# Triggers:
+# - push of any tag matching v*  (e.g. v1.0.1, v2.0.0)  → publishes
+# - manual workflow_dispatch from the Actions tab        → publishes
+#
+# To cut a release:
+#   1. Bump "version" in package.json on main (e.g. 1.0.0 → 1.0.1).
+#   2. Commit:        git commit -am "Release v1.0.1"
+#   3. Tag the commit: git tag v1.0.1
+#   4. Push both:     git push && git push --tags
+#   This workflow then publishes the tagged commit to npm.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    # Required for `npm publish --provenance` — signs the package with a build
+    # attestation linking the npm tarball back to the exact GitHub Actions run
+    # that produced it. Adds an "Attested" badge on the npm package page.
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          # 22 LTS is what we want for Trusted Publishing — it ships with npm
+          # 11.5.1+, which auto-detects the GitHub Actions OIDC token and
+          # exchanges it for a short-lived publish token at runtime. Older
+          # bundled npms can't do that.
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Sanity — confirm package.json version matches the tag
+        # Only runs on tag pushes. Refuses to publish if you tagged v1.0.2 but
+        # forgot to bump package.json — keeps the registry and git history in sync.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag version (v$TAG_VERSION) does not match package.json version ($PKG_VERSION)"
+            exit 1
+          fi
+          echo "Tag v$TAG_VERSION matches package.json $PKG_VERSION ✓"
+
+      - name: Sanity — index.js parses
+        run: node --check index.js
+
+      - name: Sanity — package.json + config.schema.json are valid JSON
+        run: |
+          node -e "JSON.parse(require('fs').readFileSync('package.json','utf8'))"
+          node -e "JSON.parse(require('fs').readFileSync('config.schema.json','utf8'))"
+
+      # No NPM_TOKEN secret is used. Authentication happens via Trusted
+      # Publishing: GitHub Actions issues an OIDC token (because of the
+      # `id-token: write` permission above), npm verifies that the token
+      # was issued for the registered (repo, workflow) pair, and grants a
+      # short-lived publish token transparently. Configure the trusted
+      # publisher once at:
+      # https://www.npmjs.com/package/homebridge-ratgdo-forceclose/access
+      - name: Publish to npm
+        run: npm publish --access public --provenance

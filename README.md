@@ -168,6 +168,42 @@ The setting being toggled (`obstFromStatus`) corresponds to the **"Get obstructi
 
 - **Cooldown active error.** You tapped the switch too soon after the previous tap. Wait for the configured `cooldownMs` to elapse. Default is 20 seconds.
 
+## Releasing (maintainer notes)
+
+Releases are published to npm automatically by [`.github/workflows/publish.yml`](.github/workflows/publish.yml) when a tag matching `v*` is pushed. To cut a release:
+
+```bash
+# 1. Bump "version" in package.json (e.g. 1.0.0 → 1.0.1) and commit
+git commit -am "Release v1.0.1"
+
+# 2. Tag the commit
+git tag v1.0.1
+
+# 3. Push both
+git push && git push --tags
+```
+
+The workflow then runs `npm publish --access public --provenance` against the tagged commit. The `--provenance` flag attaches a build attestation that links the npm tarball back to the exact GitHub Actions run, visible as an "Attested" badge on the npm package page.
+
+The workflow refuses to publish if the git tag version doesn't match `package.json` — that's a guard against tagging `v1.0.2` while forgetting to bump `package.json`, which would leave the registry and git history out of sync.
+
+You can also trigger the workflow manually from the **Actions** tab via `workflow_dispatch` (publishes whatever's currently in `package.json`).
+
+**Authentication:** the workflow uses [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers) — no `NPM_TOKEN` secret in GitHub. Instead, npm is configured to trust this specific repo + workflow combination via OIDC, and GitHub Actions issues a short-lived OIDC token at run time. There's no long-lived secret to leak or rotate.
+
+**One-time setup** (after the workflow lands on `main`):
+
+1. Go to https://www.npmjs.com/package/homebridge-ratgdo-forceclose/access
+2. Scroll to **Trusted Publisher** → **Add trusted publisher**
+3. Choose **GitHub Actions** and fill in:
+   - Organization or user: `Haglerd`
+   - Repository: `homebridge-ratgdo-forceclose`
+   - Workflow filename: `publish.yml`
+   - Environment name: *(leave blank unless you set up a deployment environment)*
+4. Save.
+
+That's it. Push a `v*` tag and the workflow publishes — no secrets configured anywhere.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
