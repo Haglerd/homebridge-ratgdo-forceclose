@@ -2,7 +2,8 @@
   "pluginAlias": "RatgdoForceClose",
   "pluginType": "accessory",
   "singular": false,
-  "headerDisplay": "Adds a momentary 'Force Close' switch. On tap: toggles ratgdo's obstruction-from-status setting (so the firmware ignores the false sun-glare pin signal), sends close, waits, then restores the setting.\n\n**Use only when you can see the door and confirm nothing's in the way. Don't put this in an automation.**",
+  "headerDisplay": "Adds a momentary **Force Close** switch in HomeKit. On tap, the plugin temporarily changes ratgdo's obstruction-source setting (so the firmware ignores a sun-glare false-tripped photo eye), sends close, waits for the door to finish, then restores the setting.\n\n_Use only when you can see the door and have confirmed nothing is in the way. Don't put this switch in an automation._",
+  "footerDisplay": "After saving, restart the Homebridge child bridge (or Homebridge itself) so the new switch shows up in the Home app.\n\n**Need help?** See the [README](https://github.com/Haglerd/homebridge-ratgdo-forceclose#readme) for the four-step POST sequence, troubleshooting, and the safety notice.",
   "schema": {
     "type": "object",
     "properties": {
@@ -10,44 +11,51 @@
         "title": "Switch Name",
         "type": "string",
         "default": "Force Close Garage",
-        "required": true
+        "required": true,
+        "description": "The name shown in HomeKit for this switch."
       },
       "ratgdoHost": {
         "title": "ratgdo URL",
         "type": "string",
         "placeholder": "http://192.168.1.50",
         "required": true,
-        "description": "Base URL of your ratgdo (the IP or hostname you use to access its web UI)."
+        "format": "uri",
+        "description": "Base URL of your ratgdo (the IP or hostname you use to access its web UI). The 'http://' prefix is added automatically if you omit it."
       },
       "username": {
-        "title": "Username (only if 'Require Password' is enabled on ratgdo)",
-        "type": "string"
+        "title": "Username",
+        "type": "string",
+        "description": "Only required if you have enabled 'Require Password' on ratgdo's settings page. Leave blank if your ratgdo allows unauthenticated requests."
       },
       "password": {
         "title": "Password",
-        "type": "string"
+        "type": "string",
+        "x-schema-form": {
+          "type": "password"
+        },
+        "description": "Paired with Username. The plugin uses HTTP Digest authentication, which is what ratgdo's firmware uses."
       },
       "settingKey": {
         "title": "Setting key to toggle",
         "type": "string",
         "default": "obstFromStatus",
         "oneOf": [
-          { "title": "obstFromStatus (Get obstruction from GDO status messages)", "enum": ["obstFromStatus"] },
-          { "title": "pinBasedObst (inverse — read from sensor pin)", "enum": ["pinBasedObst"] }
+          { "title": "obstFromStatus — Get obstruction from GDO status messages (recommended)", "enum": ["obstFromStatus"] },
+          { "title": "pinBasedObst — read obstruction from sensor pin (inverse)", "enum": ["pinBasedObst"] }
         ],
-        "description": "Default matches the 'Get obstruction from GDO status messages' checkbox in ratgdo's settings page. If toggling that one doesn't get the door to close, switch to pinBasedObst (and flip the bypass/normal values below)."
+        "description": "Default matches the 'Get obstruction from GDO status messages' checkbox in ratgdo's settings. If toggling that one does not get the door to close, switch to pinBasedObst and flip the bypass/normal values below."
       },
       "bypassValue": {
         "title": "Value during close (bypass state)",
         "type": "boolean",
         "default": true,
-        "description": "For obstFromStatus: true means use messages, ignore pin (the sun-flare false trip). For pinBasedObst: false means stop reading the pin."
+        "description": "For obstFromStatus: true means use status messages, ignore the photo-eye pin (the sun-flare false trip). For pinBasedObst: false means stop reading the pin entirely."
       },
       "normalValue": {
         "title": "Value to restore afterward",
         "type": "boolean",
         "default": false,
-        "description": "Your normal setting — what it should go back to when done."
+        "description": "Your normal pre-tap setting — what the plugin restores after the close completes."
       },
       "closeWaitMs": {
         "title": "Wait between close and restore (ms)",
@@ -55,15 +63,45 @@
         "default": 18000,
         "minimum": 1000,
         "maximum": 60000,
-        "description": "Should be longer than your full close duration so the bypass stays in effect until the door is fully shut. Your status.json shows closeDuration: 12s, so 18000 (18s) is a sensible default."
+        "description": "Should comfortably exceed your door's full close duration so the bypass stays in effect until the door is fully shut. The 18000 (18s) default is conservative and works for most residential garage doors; check your ratgdo's status page for closeDuration if you want to tune it."
       },
       "cooldownMs": {
         "title": "Cooldown between triggers (ms)",
         "type": "integer",
         "default": 20000,
         "minimum": 0,
-        "maximum": 120000
+        "maximum": 120000,
+        "description": "Minimum time between consecutive force-close triggers. Prevents fat-finger re-tapping. Set to 0 to disable, but read the safety notice in the header first."
       }
     }
-  }
+  },
+  "layout": [
+    {
+      "type": "fieldset",
+      "title": "Connection",
+      "expandable": false,
+      "items": ["name", "ratgdoHost"]
+    },
+    {
+      "type": "fieldset",
+      "title": "Authentication (optional)",
+      "expandable": true,
+      "expanded": false,
+      "items": ["username", "password"]
+    },
+    {
+      "type": "fieldset",
+      "title": "Advanced — setting toggle behavior",
+      "expandable": true,
+      "expanded": false,
+      "items": ["settingKey", "bypassValue", "normalValue"]
+    },
+    {
+      "type": "fieldset",
+      "title": "Advanced — timing",
+      "expandable": true,
+      "expanded": false,
+      "items": ["closeWaitMs", "cooldownMs"]
+    }
+  ]
 }
