@@ -2,6 +2,28 @@
 
 All notable changes to this plugin are documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] — 2026-04-30
+
+Speed pass on the force-close sequence — confirmed via reading the homekit-ratgdo32 firmware source.
+
+### Added
+
+- **`bundleTtcZero` option** (default `true`). The plugin reads the user's `TTCseconds` setting during pre-flight and, on the same flash POST that toggles `obstFromStatus=true`, also sets `TTCseconds=0`. ratgdo's `/setgdo` handler iterates `server.args()` and only calls `ESP8266_SAVE_CONFIG()` ONCE at the end of the loop, so bundling is a free piggyback — same flash, same reboot, same recovery time. Step 3 restores the original TTC in the same flash POST as the `obstFromStatus` restore. Skips the ~5–10s warning-beep window per close, **without permanently disabling the warning beep on normal HomeKit closes**. Disable in config if you want the warning beep during force-close (e.g. for safety when you can't see the door).
+- **`postCloseSettleMs` option** (default `8000`). Small fixed wait after the door is observed `Closed` and before the restore POST, so ratgdo has a moment to settle before another flash-write reboots it.
+
+### Changed
+
+- **Active wait for `Closed` instead of fixed `closeWaitMs` sleep.** v1.0.4 always slept the full `closeWaitMs` (60s default) before firing Step 3 — even if the door physically closed in 12s. v1.0.5 polls `garageDoorState` every 500ms after Step 2 and fires Step 3 as soon as `Closed` is observed (capped at `closeWaitMs`). Saves ~40s on average for default-config users; old behavior is recoverable by setting `closeWaitMs=12000` and `postCloseSettleMs=0`.
+- **`closeWaitMs` semantics changed** from "fixed sleep" to "max wait for Closed." Default and bounds unchanged. UI title relabeled to reflect this.
+- New helper `postSetGdoMulti({k1: v1, k2: v2})` POSTs multiple key=value pairs in a single `/setgdo` request. Used by `postSetGdo` (single key) and the bundled flash POSTs.
+- Pre-flight log line now includes `TTCseconds` reading when present.
+- New "On tap:" summary line reflects the bundled flow with TTC.
+
+### Notes
+
+- `obstFromStatus` cannot be changed without a flash write — verified in homekit-ratgdo32 source. There is no in-memory or transient override path. The flash write is what reboots ratgdo on some installs; v1.0.4's "wait for fully ready" handling is unchanged in v1.0.5.
+- For users who want even faster taps in the **skip-Step-1** fast path (where `obstFromStatus` already matches `bypassValue` so no flash happens at all), set `TTCseconds=0` permanently in the ratgdo web UI. The plugin can't help on that path because it doesn't trigger any flash POSTs.
+
 ## [1.0.4] — 2026-04-30
 
 ### Fixed
@@ -76,6 +98,7 @@ Initial public release on npm.
 - **CI workflow** (`.github/workflows/ci.yml`) — runs `node --check` and JSON validation on every PR.
 - **Tag-triggered npm publish workflow** (`.github/workflows/publish.yml`) using npm Trusted Publishing (OIDC) — no long-lived secrets.
 
+[1.0.5]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.0.5
 [1.0.4]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.0.4
 [1.0.3]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.0.3
 [1.0.2]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.0.2
