@@ -53,16 +53,29 @@ class RatgdoForceCloseAccessory {
     // close as soon as ratgdo is ready, no faster, no slower. 15s default
     // covers the worst case where ratgdo's NVS flash write is slow or the
     // firmware briefly crashes/restarts after the config change.
-    this.interStepMaxWaitMs = clampInt(this.config.interStepMaxWaitMs, 1000, 60000, 15000);
+    // Browser testing showed ratgdo can take ~10s to come back after the
+    // obstFromStatus flash write reboots its firmware. 30s default gives
+    // plenty of headroom for slower flash / WiFi reconnect.
+    this.interStepMaxWaitMs = clampInt(this.config.interStepMaxWaitMs, 1000, 60000, 30000);
 
     this.busy = false;
     this.lastFiredAt = 0;
+
+    // Digest auth nonce cache. After the first 401 challenge, we keep
+    // realm / nonce / qop / opaque / algorithm so subsequent requests
+    // can send the Authorization header preemptively (with incrementing
+    // nc) instead of doing the unauthed → 401 → authed dance every time.
+    // Halves the request count to ratgdo on every force-close sequence,
+    // which significantly reduces the load that crashes ratgdo's firmware.
+    // Reset on plugin restart or when ratgdo invalidates the nonce (sends
+    // 401 to a request that included our cached Authorization header).
+    this.cachedAuth = null;
 
     this.infoService = new Service.AccessoryInformation()
       .setCharacteristic(Characteristic.Manufacturer, 'DIY')
       .setCharacteristic(Characteristic.Model, 'Ratgdo Force Close')
       .setCharacteristic(Characteristic.SerialNumber, this.name.replace(/\s+/g, '-'))
-      .setCharacteristic(Characteristic.FirmwareRevision, '1.0.0');
+      .setCharacteristic(Characteristic.FirmwareRevision, '1.0.3');
 
     this.switchService = new Service.Switch(this.name);
     this.switchService
@@ -127,19 +140,55 @@ class RatgdoForceCloseAccessory {
   }
 
   async runForceClose() {
+    // Pre-flight: read ratgdo's current state, used to skip the whole
+    // sequence if the door is already Closed (no work needed).
+    const status = await this.getStatusJson();
+    if (status) {
+      this.log.info(`Pre-flight: door=${status.garageDoorState}, ${this.settingKey}=${status[this.settingKey]}`);
+      if (status.garageDoorState === 'Closed') {
+        this.log.info('Door already closed. Nothing to do.');
+        return;
+      }
+    }
+
+    // Skip Step 1 if obstFromStatus already matches bypassValue (no flash
+    // write needed). Skip Step 3 if it would not change. Helps users whose
+    // permanent state already matches; no-op for users whose normal is the
+    // opposite of bypass (typical case where the toggle is required).
+    const skipBypass = status && status[this.settingKey] === this.bypassValue;
     let bypassApplied = false;
+
     try {
-      this.log.info(`Step 1/3: ${this.settingKey} → ${formatVal(this.bypassValue)}`);
-      await this.postSetGdo(this.settingKey, this.bypassValue);
-      bypassApplied = true;
+      if (skipBypass) {
+        this.log.info(`Step 1/3 SKIPPED: ${this.settingKey} already ${formatVal(this.bypassValue)}, no flash write needed`);
+      } else {
+        this.log.info(`Step 1/3: ${this.settingKey} → ${formatVal(this.bypassValue)} (flash write — ratgdo may briefly become unresponsive)`);
+        await this.postSetGdo(this.settingKey, this.bypassValue);
+        bypassApplied = true;
 
-      // Active poll: probe ratgdo until it's responsive, then send the close.
-      // Replaces the old fixed inter-step sleep — proceeds the moment ratgdo
-      // is back, no faster, no slower. See waitForRatgdoReady() below.
-      await this.waitForRatgdoReady();
+        // Active poll: wait for ratgdo's HTTP server to be responsive again
+        // before sending the close. The flash write of obstFromStatus crashes
+        // some ratgdo installs — polling here means we wait for ratgdo to
+        // reboot and come back, however long that takes (up to interStepMaxWaitMs),
+        // before issuing the close command (which doesn't trigger another
+        // flash write per ratgdo's helperGarageDoorState).
+        await this.waitForRatgdoReady();
+      }
 
-      this.log.info('Step 2/3: garageDoorState → 0 (close)');
+      this.log.info('Step 2/3: garageDoorState → 0 (close — no flash write)');
       await this.postSetGdoWithRetry('garageDoorState', 0);
+
+      // Verify the close actually started. ratgdo's response of 200 OK only
+      // confirms the HTTP request was received — the close itself happens
+      // after a 5s TTC delay and the firmware can crash mid-sequence
+      // without the door ever moving. Poll garageDoorState for the
+      // Open → Closing/Closed transition (typically arrives ~5s after the
+      // POST due to TTC). If we don't see it within 10s, something's wrong.
+      const closeStarted = await this.verifyCloseStarted();
+      if (!closeStarted) {
+        this.log.error(`CRITICAL: door state never transitioned to Closing after POST 200. Close was lost (likely ratgdo firmware crash mid-close). Skipping Step 3 to avoid leaving in inconsistent state — restore ${this.settingKey} manually if needed.`);
+        return;
+      }
 
       this.log.info(`Step 3/3: waiting ${this.closeWaitMs}ms then restoring ${this.settingKey} → ${formatVal(this.normalValue)}`);
       await sleep(this.closeWaitMs);
@@ -158,6 +207,50 @@ class RatgdoForceCloseAccessory {
           );
         }
       }
+    }
+  }
+
+  // After Step 2 (close POST), verify the door actually starts closing by
+  // polling garageDoorState for the Open → Closing/Closed transition.
+  // ratgdo's 200 OK only confirms the HTTP request was received; the actual
+  // close happens later (5s TTC + close cycle), and the firmware can crash
+  // between those two events without the door ever moving. Returns true if
+  // we observed the transition, false if it never happened in the window.
+  async verifyCloseStarted() {
+    const start = Date.now();
+    const maxWaitMs = 10000;
+    const probeIntervalMs = 500;
+    while (Date.now() - start < maxWaitMs) {
+      try {
+        const status = await this.getStatusJson();
+        if (!status) {
+          await sleep(probeIntervalMs);
+          continue;
+        }
+        if (status.garageDoorState === 'Closing' || status.garageDoorState === 'Closed') {
+          this.log.info(`  → ratgdo confirms door is ${status.garageDoorState} (after ${Date.now() - start}ms)`);
+          return true;
+        }
+      } catch (err) { /* keep probing */ }
+      await sleep(probeIntervalMs);
+    }
+    return false;
+  }
+
+  // Read ratgdo's /status.json. Used by the pre-flight check to decide
+  // which steps of the force-close sequence to skip. Returns null on
+  // failure — caller proceeds with the full sequence as a fallback.
+  async getStatusJson() {
+    try {
+      const res = await this.httpRequestWithAuth(`${this.ratgdoHost}/status.json`, {
+        method: 'GET',
+        headers: { 'Connection': 'close' },
+        timeoutMs: 3000,
+      });
+      return JSON.parse(res.body);
+    } catch (err) {
+      this.log.warn(`Pre-flight status read failed (${err.code || err.message}); proceeding with full sequence`);
+      return null;
     }
   }
 
@@ -224,21 +317,50 @@ class RatgdoForceCloseAccessory {
   }
 
   // Handles digest auth in case ratgdo's "Require Password" is enabled.
-  // First request unauthed; if 401 with Digest challenge, retry with response.
+  // Uses a per-accessory nonce cache to avoid the unauthed→401→authed dance
+  // on every request. First request gets a fresh challenge; subsequent
+  // requests send Authorization preemptively with incrementing nc until
+  // ratgdo invalidates the nonce.
   async httpRequestWithAuth(urlStr, opts) {
+    const u = new URL(urlStr);
+    const uri = u.pathname + u.search;
+    const method = opts.method || 'GET';
+
+    // Fast path: reuse cached nonce if we have one.
+    if (this.cachedAuth && this.username && this.password) {
+      this.cachedAuth.nc++;
+      const auth = buildDigestAuthHeaderFromCached(this.cachedAuth, this.username, this.password, method, uri);
+      const optsAuth = { ...opts, headers: { ...(opts.headers || {}), Authorization: auth } };
+      try {
+        return await httpRequest(urlStr, optsAuth);
+      } catch (err) {
+        // Cached nonce was rejected — fall through to fresh challenge.
+        if (err.is401) {
+          this.cachedAuth = null;
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    // Slow path: send unauthed, parse the 401 challenge, retry with auth,
+    // and cache the params for next time.
     try {
       return await httpRequest(urlStr, opts);
     } catch (err) {
       if (!err.is401 || !err.wwwAuthenticate || !this.username || !this.password) {
         throw err;
       }
-      const auth = buildDigestAuthHeader(
-        err.wwwAuthenticate,
-        this.username,
-        this.password,
-        opts.method || 'GET',
-        new URL(urlStr).pathname + new URL(urlStr).search
-      );
+      const params = parseAuthHeaderParams(err.wwwAuthenticate);
+      this.cachedAuth = {
+        realm: params.realm || '',
+        nonce: params.nonce || '',
+        qop: (params.qop || 'auth').split(',')[0].trim(),
+        opaque: params.opaque,
+        algorithm: (params.algorithm || 'MD5').toUpperCase(),
+        nc: 1,
+      };
+      const auth = buildDigestAuthHeaderFromCached(this.cachedAuth, this.username, this.password, method, uri);
       const opts2 = { ...opts, headers: { ...(opts.headers || {}), Authorization: auth } };
       return httpRequest(urlStr, opts2);
     }
@@ -272,7 +394,9 @@ function isTransientConnectionError(err) {
   const code = err.code || '';
   if (code === 'ECONNRESET' || code === 'ECONNREFUSED' || code === 'ETIMEDOUT' || code === 'EPIPE') return true;
   const msg = String(err.message || '');
-  return /econnreset|econnrefused|etimedout|epipe/i.test(msg);
+  // Also catch our own httpRequest's "request timed out after Nms" message
+  // for older error paths that throw without a .code.
+  return /econnreset|econnrefused|etimedout|epipe|timed.?out/i.test(msg);
 }
 
 function formatVal(v) {
@@ -319,10 +443,52 @@ function httpRequest(urlStr, { method = 'GET', headers = {}, body = null, timeou
       });
     });
     req.on('error', reject);
-    req.on('timeout', () => req.destroy(new Error(`request timed out after ${timeoutMs}ms`)));
+    req.on('timeout', () => {
+      // Tag with .code = 'ETIMEDOUT' so isTransientConnectionError classifies
+      // it as retryable. Without this, plain Error message wasn't matched and
+      // the active-poll loop bailed instead of retrying.
+      const e = new Error(`request timed out after ${timeoutMs}ms`);
+      e.code = 'ETIMEDOUT';
+      req.destroy(e);
+    });
     if (body != null) req.write(body);
     req.end();
   });
+}
+
+// Build a Digest Authorization header from a previously-cached challenge.
+// Lets us skip the unauthed→401→authed dance after the first successful
+// auth, halving the number of HTTP requests we send to ratgdo per
+// force-close sequence. The caller is responsible for incrementing
+// cached.nc before calling.
+function buildDigestAuthHeaderFromCached(cached, username, password, method, uri) {
+  const crypto = require('crypto');
+  const realm = cached.realm || '';
+  const nonce = cached.nonce || '';
+  const qop = cached.qop || 'auth';
+  const opaque = cached.opaque;
+  const algorithm = cached.algorithm || 'MD5';
+
+  const md5 = (s) => crypto.createHash('md5').update(s).digest('hex');
+  const ha1 = md5(`${username}:${realm}:${password}`);
+  const ha2 = md5(`${method}:${uri}`);
+  const cnonce = crypto.randomBytes(8).toString('hex');
+  const nc = (cached.nc || 1).toString(16).padStart(8, '0');
+  const response = md5(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`);
+
+  const parts = [
+    `username="${username}"`,
+    `realm="${realm}"`,
+    `nonce="${nonce}"`,
+    `uri="${uri}"`,
+    `algorithm=${algorithm}`,
+    `qop=${qop}`,
+    `nc=${nc}`,
+    `cnonce="${cnonce}"`,
+    `response="${response}"`,
+  ];
+  if (opaque) parts.push(`opaque="${opaque}"`);
+  return 'Digest ' + parts.join(', ');
 }
 
 // Minimal RFC 2617 / 7616 Digest auth header builder (qop=auth, MD5).
