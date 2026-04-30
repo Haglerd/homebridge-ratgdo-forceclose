@@ -23,7 +23,7 @@
   "author": "Haglerd",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Haglerd/homebridge-ratgdo-forceclose.git"
+    "url": "git+https://github.com/Haglerd/homebridge-ratgdo-forceclose.git"
   },
   "bugs": {
     "url": "https://github.com/Haglerd/homebridge-ratgdo-forceclose/issues"
