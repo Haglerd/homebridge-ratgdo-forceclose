@@ -35,17 +35,20 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          # Node 24 ships with npm 11.x, which is required for Trusted
+          # Publishing OIDC. Node 22 LTS still bundles npm 10.x in some
+          # patch releases — npm 10 silently 404s on OIDC publishes
+          # because the OIDC token-exchange path was added in npm 11.5.1.
+          # Don't try `npm install -g npm@latest` to upgrade — it hits a
+          # known circular `promise-retry` MODULE_NOT_FOUND bug during
+          # the self-upgrade on Node 22.
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Force-upgrade npm to latest
-        # Trusted Publishing requires npm 11.5.1+. Node 22 LTS still ships with
-        # bundled npm 10.x in some patch releases, which silently falls back to
-        # token auth and 404s when there's no token. Upgrade unconditionally.
+      - name: Show toolchain versions
         run: |
-          npm install -g npm@latest
           echo "node: $(node --version)"
-          echo "npm: $(npm --version)"
+          echo "npm:  $(npm --version)"
 
       - name: Sanity — confirm package.json version matches the tag
         # Only runs on tag pushes. Refuses to publish if you tagged v1.0.2 but
