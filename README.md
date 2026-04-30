@@ -168,6 +168,29 @@ The setting being toggled (`obstFromStatus`) corresponds to the **"Get obstructi
 
 - **Cooldown active error.** You tapped the switch too soon after the previous tap. Wait for the configured `cooldownMs` to elapse. Default is 20 seconds.
 
+## Releasing (maintainer notes)
+
+Releases are published to npm automatically by [`.github/workflows/publish.yml`](.github/workflows/publish.yml) when a tag matching `v*` is pushed. To cut a release:
+
+```bash
+# 1. Bump "version" in package.json (e.g. 1.0.0 → 1.0.1) and commit
+git commit -am "Release v1.0.1"
+
+# 2. Tag the commit
+git tag v1.0.1
+
+# 3. Push both
+git push && git push --tags
+```
+
+The workflow then runs `npm publish --access public --provenance` against the tagged commit. The `--provenance` flag attaches a build attestation that links the npm tarball back to the exact GitHub Actions run, visible as an "Attested" badge on the npm package page.
+
+The workflow refuses to publish if the git tag version doesn't match `package.json` — that's a guard against tagging `v1.0.2` while forgetting to bump `package.json`, which would leave the registry and git history out of sync.
+
+You can also trigger the workflow manually from the **Actions** tab via `workflow_dispatch` (publishes whatever's currently in `package.json`).
+
+**Required GitHub repo secret:** `NPM_TOKEN` — a granular access token with publish rights on this package and "Bypass 2FA" enabled. Set it once at **Settings → Secrets and variables → Actions → New repository secret**.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
