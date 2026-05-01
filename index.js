@@ -129,7 +129,7 @@ class RatgdoForceCloseAccessory {
       .setCharacteristic(Characteristic.Manufacturer, 'DIY')
       .setCharacteristic(Characteristic.Model, 'Ratgdo Force Close')
       .setCharacteristic(Characteristic.SerialNumber, this.name.replace(/\s+/g, '-'))
-      .setCharacteristic(Characteristic.FirmwareRevision, '1.2.0');
+      .setCharacteristic(Characteristic.FirmwareRevision, '1.2.1');
 
     this.switchService = new Service.Switch(this.name);
     this.switchService
@@ -143,11 +143,7 @@ class RatgdoForceCloseAccessory {
     // sometimes return 401 — httpRequestWithAuth handles both.
     if (this.enableRebootButton) {
       this.rebootService = new Service.Switch('Reboot', 'reboot');
-      // Explicit Name characteristic — Service constructor displayName isn't
-      // reliably surfaced by iOS Home for non-primary services on a
-      // multi-service accessory. Setting Name explicitly fixes "every service
-      // shows the accessory name" UX bug.
-      this.rebootService.setCharacteristic(Characteristic.Name, 'Reboot');
+      setServiceName(this.rebootService, 'Reboot');
       this.rebootService
         .getCharacteristic(Characteristic.On)
         .onGet(async () => false)
@@ -162,7 +158,7 @@ class RatgdoForceCloseAccessory {
     // Home → Settings → Notifications for that accessory.
     if (this.enableObstructionSensor) {
       this.obstructionService = new Service.ContactSensor('Obstruction', 'obstruction');
-      this.obstructionService.setCharacteristic(Characteristic.Name, 'Obstruction');
+      setServiceName(this.obstructionService, 'Obstruction');
       this.obstructionService
         .getCharacteristic(Characteristic.ContactSensorState)
         .onGet(async () => (this.lastObstructed
@@ -173,7 +169,7 @@ class RatgdoForceCloseAccessory {
     // v1.1.0 — optional Motion sensor. Mirrors status.json's garageMotion.
     if (this.enableMotionSensor) {
       this.motionService = new Service.MotionSensor('Motion', 'motion');
-      this.motionService.setCharacteristic(Characteristic.Name, 'Motion');
+      setServiceName(this.motionService, 'Motion');
       this.motionService
         .getCharacteristic(Characteristic.MotionDetected)
         .onGet(async () => !!this.lastMotion);
@@ -756,6 +752,28 @@ class RatgdoForceCloseAccessory {
 }
 
 // ---------- helpers ----------
+
+// Set a service's HomeKit-displayed name with maximum compatibility.
+// Newer iOS (13+) reads Characteristic.ConfiguredName for service tiles in a
+// multi-service accessory; older iOS reads Characteristic.Name. Setting only
+// one means iOS may still fall back to the accessory's name (so every tile
+// shows "Force Close Garage" instead of the per-service label). Setting both
+// is the universally-supported fix. ConfiguredName might not exist in older
+// HAP-NodeJS — guard with a presence check instead of crashing.
+function setServiceName(service, name) {
+  try { service.setCharacteristic(Characteristic.Name, name); } catch (e) { /* ignore */ }
+  if (Characteristic.ConfiguredName) {
+    try {
+      // addOptionalCharacteristic ensures the characteristic exists on the
+      // service before we try to set it. ConfiguredName is OPTIONAL on most
+      // service types so it may not be pre-added.
+      if (typeof service.addOptionalCharacteristic === 'function') {
+        service.addOptionalCharacteristic(Characteristic.ConfiguredName);
+      }
+      service.setCharacteristic(Characteristic.ConfiguredName, name);
+    } catch (e) { /* ignore */ }
+  }
+}
 
 function normalizeHost(host) {
   if (!host) return null;

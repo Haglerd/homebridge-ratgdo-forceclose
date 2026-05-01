@@ -2,6 +2,12 @@
 
 All notable changes to this plugin are documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] — 2026-04-30
+
+### Fixed
+
+- **Service names still showing as the accessory name in iOS Home.** v1.2.0's `Characteristic.Name` fix wasn't enough — iOS 13+ reads `Characteristic.ConfiguredName` for service tile labels in a multi-service accessory, falling back to `Characteristic.Name` only if `ConfiguredName` is unset. v1.2.1 sets BOTH characteristics on each new service via a new `setServiceName` helper. The helper guards against older HAP-NodeJS that may not expose `ConfiguredName`. After upgrading, the Reboot, Obstruction, and Motion services will display their distinct names instead of inheriting "Force Close Garage" from the accessory. Note: iOS Home aggressively caches accessory layouts — if names are still wrong after upgrade, remove the accessory from Home (Home → long-press tile → Accessory Details → Remove) and re-add via Homebridge.
+
 ## [1.2.0] — 2026-04-30
 
 Adds support for a custom ratgdo firmware build that exposes a `forceClose` `/setgdo` handler. Also fixes a v1.1.0 UX bug where the new sensor/reboot services all displayed as the accessory name in iOS Home.
@@ -147,6 +153,7 @@ Initial public release on npm.
 - **CI workflow** (`.github/workflows/ci.yml`) — runs `node --check` and JSON validation on every PR.
 - **Tag-triggered npm publish workflow** (`.github/workflows/publish.yml`) using npm Trusted Publishing (OIDC) — no long-lived secrets.
 
+[1.2.1]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.2.1
 [1.2.0]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.2.0
 [1.1.0]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.1.0
 [1.0.5]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.0.5
