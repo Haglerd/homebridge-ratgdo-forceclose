@@ -401,34 +401,65 @@ class RatgdoForceCloseAccessory {
     // within a few seconds of the POST. Each retry posts a fresh forceClose
     // and re-verifies. Avoids requiring the user to tap the switch twice.
     if (this.useForceClose) {
-      const maxAttempts = 3;
-      let succeeded = false;
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        this.log.info(`Force-close attempt ${attempt}/${maxAttempts}: POST forceClose=${this.forceCloseHoldMs} (wall-button hold-to-close emulation)`);
-        try {
-          await this.postSetGdoMulti({ forceClose: this.forceCloseHoldMs });
-        } catch (err) {
-          this.log.error(`forceClose POST failed: ${err.message}. Is the firmware patched?`);
-          break;
-        }
-        // Verify the door starts closing. With TTC=0 and forceClose held
-        // for ~3.5s, motion should begin within ~5s of the POST. If not,
-        // the GDO ignored this attempt — retry.
-        const closeStarted = await this.verifyCloseStarted();
-        if (closeStarted) {
-          succeeded = true;
-          if (attempt > 1) this.log.info(`Force-close confirmed on attempt ${attempt}`);
-          break;
-        }
-        if (attempt < maxAttempts) {
-          this.log.warn(`Force-close attempt ${attempt} did not move the door — Sec+1.0 motors sometimes require a second confirm. Retrying.`);
-        }
-      }
-      if (!succeeded) {
-        this.log.error(`Force-close failed after ${maxAttempts} attempts. Either the firmware does not implement forceClose (running vanilla upstream?), the GDO motor refused, or the hold duration is too short. Try bumping forceCloseHoldMs.`);
+      // v1.2.1: forceclose.5+ firmware does the full 2-press override
+      // sequence inside a single POST (~8.5s firmware-side: press-hold-
+      // release, 1.5s gap, press-hold-release). Plugin sends ONE POST and
+      // monitors status until door is Closed. No more retry logic in
+      // plugin — it's been moved into the firmware where the timing is
+      // tighter and more reliable.
+      //
+      // Total expected timeline from POST to Closed:
+      //   T+0:    POST forceClose
+      //   T+0:    firmware press 1
+      //   T+3.5s: firmware release 1 (door may start closing if photo eye clear)
+      //   T+5s:   firmware press 2 (override engages if photo eye blocked)
+      //   T+10s:  motor TTC ends, door begins motion
+      //   T+22s:  door fully Closed (~12s close time)
+      const t0 = Date.now();
+      const startState = status ? status.garageDoorState : 'unknown';
+      this.log.info(`Force-close: POST forceClose=${this.forceCloseHoldMs}ms — firmware will run the full 2-press hold sequence (~8.5s). Initial door=${startState}`);
+      try {
+        await this.postSetGdoMulti({ forceClose: this.forceCloseHoldMs });
+        this.log.info(`Force-close: POST returned 200 after ${Date.now() - t0}ms`);
+      } catch (err) {
+        this.log.error(`Force-close: POST failed — ${err.message}. Is the firmware patched (v3.4.4-forceclose.5+)? See README.`);
         return;
       }
-      await this.waitForDoorClosed();
+
+      // Poll garageDoorState through the whole sequence. Print every state
+      // transition so the log shows exactly when each phase happens. The
+      // motor's first response usually shows up at ~T+10s (after press 2 +
+      // its own TTC); door physically Closed around T+22s.
+      const POLL_INTERVAL_MS = 500;
+      const MAX_WAIT_MS = 30000; // covers worst-case full 2-press + close
+      const SETTLE_AFTER_CLOSED_MS = 1000;
+      let lastState = startState;
+      let observedClosing = false;
+      let closedAt = null;
+
+      while (Date.now() - t0 < MAX_WAIT_MS) {
+        await sleep(POLL_INTERVAL_MS);
+        const s = await this.getStatusJson();
+        if (!s) continue;
+        const state = s.garageDoorState;
+        const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+        if (state !== lastState) {
+          this.log.info(`Force-close: +${elapsed}s — door=${lastState} → ${state}`);
+          lastState = state;
+          if (state === 'Closing') observedClosing = true;
+          if (state === 'Closed') { closedAt = Date.now(); break; }
+        }
+      }
+
+      const totalS = ((Date.now() - t0) / 1000).toFixed(1);
+      if (closedAt) {
+        await sleep(SETTLE_AFTER_CLOSED_MS);
+        this.log.info(`Force-close: SUCCESS — door Closed after ${totalS}s${observedClosing ? '' : ' (no Closing state observed; door may have closed quickly)'}`);
+      } else if (observedClosing) {
+        this.log.warn(`Force-close: door reached Closing but not yet Closed within ${totalS}s. May still be in motion — check ratgdo state directly.`);
+      } else {
+        this.log.error(`Force-close: FAILED — door state never left ${lastState} within ${totalS}s. Firmware sequence completed but motor refused override. Possible causes: (a) running vanilla firmware without forceClose handler, (b) photo-eye is blocked at the GDO motor's own terminals (independent of ratgdo), (c) hold duration too short — try bumping forceCloseHoldMs.`);
+      }
       return;
     }
 
