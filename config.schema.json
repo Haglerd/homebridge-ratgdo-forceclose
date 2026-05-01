@@ -95,6 +95,20 @@
         "maximum": 120000,
         "description": "Minimum time between consecutive force-close triggers. Prevents fat-finger re-tapping. Set to 0 to disable, but read the safety notice in the header first."
       },
+      "useForceClose": {
+        "title": "Use forceClose handler (custom firmware only)",
+        "type": "boolean",
+        "default": false,
+        "description": "When ON, the plugin sends a single POST forceClose=<ms> instead of the obstFromStatus/TTC dance. ratgdo simulates a wall-button hold-to-close — no flash write, no reboot, the only software path that closes past a fully-blocked photo eye. Requires a CUSTOM ratgdo firmware build that exposes the forceClose /setgdo handler (see README). Default OFF for compatibility with vanilla upstream firmware."
+      },
+      "forceCloseHoldMs": {
+        "title": "forceClose hold duration (ms)",
+        "type": "integer",
+        "default": 3500,
+        "minimum": 1000,
+        "maximum": 10000,
+        "description": "How long ratgdo simulates the wall-button hold when 'Use forceClose' is ON. 3500ms (3.5s) covers most GDO motors. Bump higher if the motor refuses the hold; some Sec+ 1.0 motors need 4–5s. The plugin auto-retries up to 3 times if the door doesn't start moving."
+      },
       "enableRebootButton": {
         "title": "Add a Reboot ratgdo switch",
         "type": "boolean",
@@ -205,6 +219,13 @@
       "expandable": true,
       "expanded": false,
       "items": ["closeWaitMs", "postCloseSettleMs", "interStepMaxWaitMs", "cooldownMs", "bundleTtcZero"]
+    },
+    {
+      "type": "fieldset",
+      "title": "Custom firmware — forceClose mode (v1.2.0)",
+      "expandable": true,
+      "expanded": false,
+      "items": ["useForceClose", "forceCloseHoldMs"]
     },
     {
       "type": "fieldset",

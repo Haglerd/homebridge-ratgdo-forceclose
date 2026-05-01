@@ -63,6 +63,17 @@ class RatgdoForceCloseAccessory {
     // when you can't see the door).
     this.bundleTtcZero = this.config.bundleTtcZero !== false;
 
+    // v1.2.0 — forceClose support. When ON and the running ratgdo firmware
+    // exposes the forceClose /setgdo handler (custom firmware build, see
+    // README), the plugin sends a single POST forceClose=<ms> that
+    // simulates wall-button hold-to-close. NO flash write, NO reboot, NO
+    // obstFromStatus dance — just one POST and ratgdo holds the button
+    // pressed for the configured duration. This is the only software path
+    // that closes past a fully-blocked photo-eye. Default OFF for safety
+    // and for compatibility with vanilla upstream firmware.
+    this.useForceClose = !!this.config.useForceClose;
+    this.forceCloseHoldMs = clampInt(this.config.forceCloseHoldMs, 1000, 10000, 3500);
+
     // Cooldown to prevent fat-finger re-trigger
     this.cooldownMs = clampInt(this.config.cooldownMs, 0, 120000, 20000);
 
@@ -118,7 +129,7 @@ class RatgdoForceCloseAccessory {
       .setCharacteristic(Characteristic.Manufacturer, 'DIY')
       .setCharacteristic(Characteristic.Model, 'Ratgdo Force Close')
       .setCharacteristic(Characteristic.SerialNumber, this.name.replace(/\s+/g, '-'))
-      .setCharacteristic(Characteristic.FirmwareRevision, '1.1.0');
+      .setCharacteristic(Characteristic.FirmwareRevision, '1.2.0');
 
     this.switchService = new Service.Switch(this.name);
     this.switchService
@@ -131,7 +142,12 @@ class RatgdoForceCloseAccessory {
     // ratgdo's /reboot endpoint is auth-exempt by design but real installs
     // sometimes return 401 — httpRequestWithAuth handles both.
     if (this.enableRebootButton) {
-      this.rebootService = new Service.Switch(`${this.name} Reboot`, 'reboot');
+      this.rebootService = new Service.Switch('Reboot', 'reboot');
+      // Explicit Name characteristic — Service constructor displayName isn't
+      // reliably surfaced by iOS Home for non-primary services on a
+      // multi-service accessory. Setting Name explicitly fixes "every service
+      // shows the accessory name" UX bug.
+      this.rebootService.setCharacteristic(Characteristic.Name, 'Reboot');
       this.rebootService
         .getCharacteristic(Characteristic.On)
         .onGet(async () => false)
@@ -145,7 +161,8 @@ class RatgdoForceCloseAccessory {
     // state change for ContactSensor when the user enables it in
     // Home → Settings → Notifications for that accessory.
     if (this.enableObstructionSensor) {
-      this.obstructionService = new Service.ContactSensor(`${this.name} Obstruction`, 'obstruction');
+      this.obstructionService = new Service.ContactSensor('Obstruction', 'obstruction');
+      this.obstructionService.setCharacteristic(Characteristic.Name, 'Obstruction');
       this.obstructionService
         .getCharacteristic(Characteristic.ContactSensorState)
         .onGet(async () => (this.lastObstructed
@@ -155,7 +172,8 @@ class RatgdoForceCloseAccessory {
 
     // v1.1.0 — optional Motion sensor. Mirrors status.json's garageMotion.
     if (this.enableMotionSensor) {
-      this.motionService = new Service.MotionSensor(`${this.name} Motion`, 'motion');
+      this.motionService = new Service.MotionSensor('Motion', 'motion');
+      this.motionService.setCharacteristic(Characteristic.Name, 'Motion');
       this.motionService
         .getCharacteristic(Characteristic.MotionDetected)
         .onGet(async () => !!this.lastMotion);
@@ -364,11 +382,9 @@ class RatgdoForceCloseAccessory {
   }
 
   async runForceClose() {
-    // Pre-flight: read ratgdo's current state. We use it for:
-    //  1. Skip the whole sequence if the door is already Closed.
-    //  2. Capture original obstFromStatus so Step 3 restores to it.
-    //  3. Capture original TTCseconds so Step 3 restores to it (when
-    //     bundleTtcZero is enabled — see runtime config).
+    // Pre-flight always runs (used by both modes for the early-exit on
+    // already-Closed). useForceClose mode then takes a much shorter path
+    // that skips the obstFromStatus/TTC dance entirely.
     const status = await this.getStatusJson();
     if (status) {
       const ttcLog = (typeof status.TTCseconds === 'number') ? `, TTCseconds=${status.TTCseconds}` : '';
@@ -377,6 +393,47 @@ class RatgdoForceCloseAccessory {
         this.log.info('Door already closed. Nothing to do.');
         return;
       }
+    }
+
+    // useForceClose mode: single POST, ratgdo simulates wall-button hold.
+    // Requires custom firmware that exposes the forceClose /setgdo handler
+    // (see README).
+    //
+    // Sec+1.0 GDO motors sometimes interpret the first hold-to-close as
+    // accidental and require a second attempt to confirm intent. The plugin
+    // auto-retries up to 2 times if the door doesn't transition to Closing
+    // within a few seconds of the POST. Each retry posts a fresh forceClose
+    // and re-verifies. Avoids requiring the user to tap the switch twice.
+    if (this.useForceClose) {
+      const maxAttempts = 3;
+      let succeeded = false;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        this.log.info(`Force-close attempt ${attempt}/${maxAttempts}: POST forceClose=${this.forceCloseHoldMs} (wall-button hold-to-close emulation)`);
+        try {
+          await this.postSetGdoMulti({ forceClose: this.forceCloseHoldMs });
+        } catch (err) {
+          this.log.error(`forceClose POST failed: ${err.message}. Is the firmware patched?`);
+          break;
+        }
+        // Verify the door starts closing. With TTC=0 and forceClose held
+        // for ~3.5s, motion should begin within ~5s of the POST. If not,
+        // the GDO ignored this attempt — retry.
+        const closeStarted = await this.verifyCloseStarted();
+        if (closeStarted) {
+          succeeded = true;
+          if (attempt > 1) this.log.info(`Force-close confirmed on attempt ${attempt}`);
+          break;
+        }
+        if (attempt < maxAttempts) {
+          this.log.warn(`Force-close attempt ${attempt} did not move the door — Sec+1.0 motors sometimes require a second confirm. Retrying.`);
+        }
+      }
+      if (!succeeded) {
+        this.log.error(`Force-close failed after ${maxAttempts} attempts. Either the firmware does not implement forceClose (running vanilla upstream?), the GDO motor refused, or the hold duration is too short. Try bumping forceCloseHoldMs.`);
+        return;
+      }
+      await this.waitForDoorClosed();
+      return;
     }
 
     const originalValue = status ? status[this.settingKey] : null;

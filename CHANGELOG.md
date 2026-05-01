@@ -2,6 +2,31 @@
 
 All notable changes to this plugin are documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-04-30
+
+Adds support for a custom ratgdo firmware build that exposes a `forceClose` `/setgdo` handler. Also fixes a v1.1.0 UX bug where the new sensor/reboot services all displayed as the accessory name in iOS Home.
+
+### Added
+
+- **`useForceClose` option** (default `false`). When ON, the plugin sends a single `POST forceClose=<ms>` instead of the obstFromStatus/TTC dance. ratgdo simulates a wall-button hold-to-close — **no flash write, no reboot, no obstFromStatus toggle**. The only software path that closes past a fully-blocked photo eye. Requires a custom ratgdo firmware build that exposes the `forceClose` handler; vanilla upstream firmware will return an error and the plugin will log a clear hint.
+- **`forceCloseHoldMs` option** (default `3500`, range `1000`–`10000`). How long ratgdo simulates the wall-button hold. 3.5s default covers most GDO motors.
+- **Auto-retry on Sec+ 1.0 motors.** Some Sec+ 1.0 GDOs treat the first hold-to-close as accidental and require a second confirm. The plugin retries up to 3 times when `useForceClose` is ON and the door doesn't transition to `Closing` within ~5s of the POST. Each retry posts a fresh `forceClose` and re-verifies. Eliminates the need for users to tap the switch twice.
+
+### Fixed
+
+- **v1.1.0 service names now actually display in iOS Home.** The Service constructor's `displayName` arg wasn't reliably surfaced by iOS Home for non-primary services on a multi-service accessory — every service inherited the accessory name ("Force Close Garage" everywhere). Each new service now explicitly sets `Characteristic.Name`, which forces propagation. Names are now `Reboot`, `Obstruction`, `Motion` (the accessory name supplies context within the tile).
+
+### Changed
+
+- `runForceClose()` early-branches on `useForceClose` after the pre-flight read. Pre-flight (door-state read + already-Closed early exit) still runs in both modes; everything past that diverges. Existing `obstFromStatus` mode (default) is byte-for-byte unchanged.
+- Schema gains a new "Custom firmware — forceClose mode" fieldset with the two new options. Both default OFF; existing configs keep their behavior.
+- `FirmwareRevision` characteristic bumped from `1.1.0` → `1.2.0`.
+
+### Notes
+
+- `useForceClose` is mutually exclusive with the obstFromStatus dance. When ON, the plugin sends ONE POST and does no flash writes — `bundleTtcZero`, `closeWaitMs`, `postCloseSettleMs`, `interStepMaxWaitMs` are still read but only `closeWaitMs` is consulted (it caps the wait-for-Closed poll).
+- Vanilla upstream `homekit-ratgdo` does not implement `forceClose`. Enable `useForceClose` only if you've flashed a firmware build that does. The README notes which firmware patches expose this handler.
+
 ## [1.1.0] — 2026-04-30
 
 Additive feature release. Existing Force Close behavior is unchanged — every new feature is gated by an opt-in toggle, all of which default OFF. Existing v1.0.5 configs continue to work without modification.
@@ -122,6 +147,7 @@ Initial public release on npm.
 - **CI workflow** (`.github/workflows/ci.yml`) — runs `node --check` and JSON validation on every PR.
 - **Tag-triggered npm publish workflow** (`.github/workflows/publish.yml`) using npm Trusted Publishing (OIDC) — no long-lived secrets.
 
+[1.2.0]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.2.0
 [1.1.0]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.1.0
 [1.0.5]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.0.5
 [1.0.4]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.0.4
