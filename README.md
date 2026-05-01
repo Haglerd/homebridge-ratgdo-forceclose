@@ -23,6 +23,8 @@ A Homebridge plugin that adds a HomeKit garage-door tile (or momentary switch) f
 
 </p>
 
+**Quick start:** [Install](#installation) → [Configure](#configuration) → [Get support](#support)
+
 ## What this is
 
 A Homebridge accessory plugin that exposes one of two HomeKit accessories for your ratgdo:
@@ -280,6 +282,32 @@ You can also trigger the workflow manually from the **Actions** tab via `workflo
 4. Save.
 
 That's it. Push a `v*` tag and the workflow publishes — no secrets configured anywhere.
+
+## Plugin architecture (for Verified-plugin reviewers)
+
+This is a **static accessory plugin** (`pluginType: accessory`) rather than a dynamic platform. The choice is deliberate:
+
+- One ratgdo per garage; users have one IP / one accessory. No discovery is needed (or possible without rewriting the firmware) — config is explicit per accessory block.
+- Existing pairings keep their HomeKit accessory identifiers across plugin upgrades because static accessories don't manipulate cached UUIDs.
+- The accessory exposes a single primary service (GarageDoorOpener by default, Switch in legacy mode) plus optional secondary services (Reboot, Obstruction sensor, Motion sensor) that compose well as a single HomeKit accessory tile group.
+
+If you operate multiple ratgdo doors, add multiple accessory entries in your Homebridge `config.json` — each with its own `name` and `ratgdoHost`. There is no platform-level state shared between them.
+
+## Support
+
+Issues, feature requests, and questions: **<https://github.com/Haglerd/homebridge-ratgdo-forceclose/issues>**
+
+When opening an issue, please include:
+
+- Plugin version (`homebridge-ratgdo-forceclose@x.y.z`)
+- Homebridge version + Node version
+- ratgdo firmware version (visible at the top of `http://<ratgdo-ip>/`)
+- The relevant section of your Homebridge log around the failure
+- Whether you're on the [Haglerd/homekit-ratgdo32 fork firmware](https://github.com/Haglerd/homekit-ratgdo32) (recommended) or vanilla upstream
+
+For ratgdo *firmware* issues (not plugin issues): the firmware fork lives at <https://github.com/Haglerd/homekit-ratgdo32> and has its own issue tracker. The two repos are separate; use the one that matches your problem.
+
+This is a personal-time project; expect best-effort response within a few days. PRs welcome.
 
 ## License
 

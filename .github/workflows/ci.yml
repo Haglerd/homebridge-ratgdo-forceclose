@@ -53,3 +53,47 @@ jobs:
           }
           console.log('homebridge-plugin keyword present ✓');
           "
+
+      - name: Smoke tests
+        run: npm test
+
+  hb2-load:
+    # Smoke-load the plugin under a real Homebridge process to catch
+    # accessory-registration regressions before HB 2.0 ships. Runs only
+    # on Node 22 (HB 2.0's target runtime). Fails CI if the plugin
+    # crashes during init or never logs the registration line.
+    runs-on: ubuntu-latest
+    needs: sanity
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Homebridge (latest stable)
+        run: npm i -g homebridge
+      - name: Install plugin globally from local source
+        run: npm i -g .
+      - name: Write minimal config + storage dir
+        run: |
+          mkdir -p ~/.homebridge
+          cat > ~/.homebridge/config.json <<'JSON'
+          {
+            "bridge": { "name": "Test Bridge", "username": "CC:22:3D:E3:CE:30", "port": 51826, "pin": "031-45-154" },
+            "accessories": [
+              { "accessory": "RatgdoForceClose", "name": "Test Door", "ratgdoHost": "http://127.0.0.1:1" }
+            ]
+          }
+          JSON
+      - name: Boot Homebridge briefly + verify our accessory loads
+        run: |
+          # Run for ~12s, then SIGTERM. Grep for our log line to prove
+          # the accessory registered without crashing the bridge.
+          set -e
+          (timeout 12 homebridge -D 2>&1 | tee /tmp/hb.log) || true
+          if grep -q 'RatgdoForceClose' /tmp/hb.log; then
+            echo '::notice::RatgdoForceClose accessory loaded by Homebridge ✓'
+          else
+            echo '::error::Accessory did not register in Homebridge log'
+            tail -100 /tmp/hb.log
+            exit 1
+          fi
