@@ -1,24 +1,22 @@
 {
   "pluginAlias": "RatgdoForceClose",
   "pluginType": "accessory",
-  "singular": false,
   "headerDisplay": "Adds a momentary **Force Close** switch in HomeKit. On tap, the plugin temporarily changes ratgdo's obstruction-source setting (so the firmware ignores a sun-glare false-tripped photo eye), sends close, waits for the door to finish, then restores the setting.\n\n_Use only when you can see the door and have confirmed nothing is in the way. Don't put this switch in an automation._",
   "footerDisplay": "After saving, restart the Homebridge child bridge (or Homebridge itself) so the new switch shows up in the Home app.\n\n**Need help?** See the [README](https://github.com/Haglerd/homebridge-ratgdo-forceclose#readme) for the four-step POST sequence, troubleshooting, and the safety notice.",
   "schema": {
     "type": "object",
+    "required": ["name", "ratgdoHost"],
     "properties": {
       "name": {
-        "title": "Switch Name",
+        "title": "Accessory Name",
         "type": "string",
         "default": "Force Close Garage",
-        "required": true,
-        "description": "The name shown in HomeKit for this switch."
+        "description": "The name shown in HomeKit for this accessory."
       },
       "ratgdoHost": {
         "title": "ratgdo URL",
         "type": "string",
         "placeholder": "http://192.168.1.50",
-        "required": true,
         "format": "uri",
         "description": "Base URL of your ratgdo (the IP or hostname you use to access its web UI). The 'http://' prefix is added automatically if you omit it."
       },

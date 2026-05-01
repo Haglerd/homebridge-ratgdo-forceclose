@@ -142,7 +142,7 @@ class RatgdoForceCloseAccessory {
       .setCharacteristic(Characteristic.Manufacturer, 'DIY')
       .setCharacteristic(Characteristic.Model, 'Ratgdo Force Close')
       .setCharacteristic(Characteristic.SerialNumber, this.name.replace(/\s+/g, '-'))
-      .setCharacteristic(Characteristic.FirmwareRevision, '1.2.3');
+      .setCharacteristic(Characteristic.FirmwareRevision, require('./package.json').version);
 
     // Last-known door state (driven by status poll) — used by the
     // GarageDoorOpener service's CurrentDoorState getter and to decide
