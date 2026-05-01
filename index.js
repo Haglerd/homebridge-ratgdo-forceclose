@@ -88,17 +88,78 @@ class RatgdoForceCloseAccessory {
     // 401 to a request that included our cached Authorization header).
     this.cachedAuth = null;
 
+    // v1.1.0 — optional features (all default off, fully additive to v1.0.5).
+    // Each toggle gates its own service/behavior; nothing here changes the
+    // existing force-close sequence.
+    this.enableRebootButton = !!this.config.enableRebootButton;
+    this.rebootCooldownMs = clampInt(this.config.rebootCooldownMs, 5000, 600000, 60000);
+    this.enableObstructionSensor = !!this.config.enableObstructionSensor;
+    this.enableMotionSensor = !!this.config.enableMotionSensor;
+    this.statusPollIntervalMs = clampInt(this.config.statusPollIntervalMs, 1000, 60000, 3000);
+    this.manageDeviceSettings = !!this.config.manageDeviceSettings;
+    this.deviceDefaults = (this.config.deviceDefaults && typeof this.config.deviceDefaults === 'object')
+      ? this.config.deviceDefaults
+      : {};
+
+    // Reboot state (separate from force-close busy/cooldown).
+    this.rebootBusy = false;
+    this.lastRebootAt = 0;
+
+    // Last-observed sensor states — used by the polling loop to diff before
+    // calling updateCharacteristic, so HomeKit only sees real edges.
+    this.lastObstructed = null;
+    this.lastMotion = null;
+
+    // Status polling timer handle.
+    this.statusPollTimer = null;
+    this._pollTickFn = null;
+
     this.infoService = new Service.AccessoryInformation()
       .setCharacteristic(Characteristic.Manufacturer, 'DIY')
       .setCharacteristic(Characteristic.Model, 'Ratgdo Force Close')
       .setCharacteristic(Characteristic.SerialNumber, this.name.replace(/\s+/g, '-'))
-      .setCharacteristic(Characteristic.FirmwareRevision, '1.0.5');
+      .setCharacteristic(Characteristic.FirmwareRevision, '1.1.0');
 
     this.switchService = new Service.Switch(this.name);
     this.switchService
       .getCharacteristic(Characteristic.On)
       .onGet(async () => false)
       .onSet(this.handleOnSet.bind(this));
+
+    // v1.1.0 — optional Reboot switch. POSTs /reboot to ratgdo. Stateless
+    // momentary switch (auto-resets to Off after the request completes).
+    // ratgdo's /reboot endpoint is auth-exempt by design but real installs
+    // sometimes return 401 — httpRequestWithAuth handles both.
+    if (this.enableRebootButton) {
+      this.rebootService = new Service.Switch(`${this.name} Reboot`, 'reboot');
+      this.rebootService
+        .getCharacteristic(Characteristic.On)
+        .onGet(async () => false)
+        .onSet(this.handleRebootOnSet.bind(this));
+    }
+
+    // v1.1.0 — optional Obstruction ContactSensor. Mirrors status.json's
+    // garageObstructed flag. ContactSensorState semantics: NOT_DETECTED
+    // (contact open) when obstructed = alarm; DETECTED (contact closed)
+    // when clear = normal. iOS Home pushes a phone notification on every
+    // state change for ContactSensor when the user enables it in
+    // Home → Settings → Notifications for that accessory.
+    if (this.enableObstructionSensor) {
+      this.obstructionService = new Service.ContactSensor(`${this.name} Obstruction`, 'obstruction');
+      this.obstructionService
+        .getCharacteristic(Characteristic.ContactSensorState)
+        .onGet(async () => (this.lastObstructed
+          ? Characteristic.ContactSensorState.CONTACT_NOT_DETECTED
+          : Characteristic.ContactSensorState.CONTACT_DETECTED));
+    }
+
+    // v1.1.0 — optional Motion sensor. Mirrors status.json's garageMotion.
+    if (this.enableMotionSensor) {
+      this.motionService = new Service.MotionSensor(`${this.name} Motion`, 'motion');
+      this.motionService
+        .getCharacteristic(Characteristic.MotionDetected)
+        .onGet(async () => !!this.lastMotion);
+    }
 
     if (!this.ratgdoHost) {
       this.log.error('"ratgdoHost" is required (e.g. http://192.168.1.50)');
@@ -110,10 +171,25 @@ class RatgdoForceCloseAccessory {
       `poll for Closed (max ${this.closeWaitMs}ms) → settle ${this.postCloseSettleMs}ms → ` +
       `POST ${this.settingKey}=<original>${this.bundleTtcZero ? '+TTCseconds=<original>' : ''} (if changed)`
     );
+
+    // v1.1.0 — async init. Push opted-in device defaults, then start the
+    // sensor polling loop if any sensor is enabled. Both are best-effort and
+    // log warnings on failure rather than blocking accessory registration.
+    if (this.manageDeviceSettings && this.ratgdoHost) {
+      this.pushManagedSettings()
+        .catch((err) => this.log.warn(`Push managed settings failed: ${err.message}`));
+    }
+    if ((this.enableObstructionSensor || this.enableMotionSensor) && this.ratgdoHost) {
+      this.startStatusPolling();
+    }
   }
 
   getServices() {
-    return [this.infoService, this.switchService];
+    const services = [this.infoService, this.switchService];
+    if (this.rebootService) services.push(this.rebootService);
+    if (this.obstructionService) services.push(this.obstructionService);
+    if (this.motionService) services.push(this.motionService);
+    return services;
   }
 
   async handleOnSet(value) {
@@ -155,6 +231,136 @@ class RatgdoForceCloseAccessory {
         this.switchService.updateCharacteristic(Characteristic.On, false);
       } catch (e) { /* ignore */ }
     }, delayMs);
+  }
+
+  // v1.1.0 — Reboot switch handler. Mirrors handleOnSet's structure: cooldown
+  // gate, busy gate, host-configured gate, then async runReboot in the
+  // background while the switch auto-resets.
+  async handleRebootOnSet(value) {
+    if (!value) return;
+
+    const since = Date.now() - this.lastRebootAt;
+    if (since < this.rebootCooldownMs) {
+      const remain = Math.ceil((this.rebootCooldownMs - since) / 1000);
+      this.log.warn(`Reboot cooldown active, ${remain}s remaining. Ignoring.`);
+      this.resetRebootSwitch(800);
+      return;
+    }
+    if (this.rebootBusy) {
+      this.log.warn('Reboot already in progress. Ignoring.');
+      this.resetRebootSwitch(800);
+      return;
+    }
+    if (!this.ratgdoHost) {
+      this.log.error('ratgdoHost not configured. Aborting reboot.');
+      this.resetRebootSwitch(800);
+      return;
+    }
+
+    this.rebootBusy = true;
+    this.lastRebootAt = Date.now();
+    this.runReboot()
+      .then(() => this.log.info('Reboot command sent. ratgdo will be unavailable for ~30s.'))
+      .catch((err) => this.log.error('Reboot error:', err.message))
+      .finally(() => {
+        this.rebootBusy = false;
+        this.resetRebootSwitch(500);
+      });
+  }
+
+  resetRebootSwitch(delayMs) {
+    if (!this.rebootService) return;
+    setTimeout(() => {
+      try {
+        this.rebootService.updateCharacteristic(Characteristic.On, false);
+      } catch (e) { /* ignore */ }
+    }, delayMs);
+  }
+
+  // POST /reboot. Per homekit-ratgdo docs the endpoint is auth-exempt, but
+  // some installs return 401 anyway — the existing httpRequestWithAuth
+  // handles the digest fallback. After a successful reboot, the cached
+  // digest nonce is no longer valid (the device's nonce changes after
+  // restart), so clear it; the next request will re-challenge cleanly.
+  async runReboot() {
+    this.log.info('Sending reboot command to ratgdo');
+    const url = `${this.ratgdoHost}/reboot`;
+    await this.httpRequestWithAuth(url, {
+      method: 'POST',
+      headers: { 'Connection': 'close', 'Content-Length': '0' },
+      timeoutMs: 5000,
+    });
+    this.cachedAuth = null;
+  }
+
+  // v1.1.0 — periodic status polling for Obstruction + Motion sensors.
+  // Skips while the force-close or reboot is busy (no point polling during
+  // a flash-write recovery window). Backs off 2x on transient errors so we
+  // don't pile load on ratgdo when it's already struggling.
+  startStatusPolling() {
+    this.log.info(`Starting status polling every ${this.statusPollIntervalMs}ms for sensors`);
+
+    const tick = async () => {
+      if (this.busy || this.rebootBusy) {
+        this.scheduleNextPoll(this.statusPollIntervalMs);
+        return;
+      }
+      try {
+        const status = await this.getStatusJson();
+        if (status) this.applyStatusToSensors(status);
+        this.scheduleNextPoll(this.statusPollIntervalMs);
+      } catch (err) {
+        this.scheduleNextPoll(this.statusPollIntervalMs * 2);
+      }
+    };
+
+    this._pollTickFn = tick;
+    this.scheduleNextPoll(this.statusPollIntervalMs);
+  }
+
+  scheduleNextPoll(delayMs) {
+    if (this.statusPollTimer) clearTimeout(this.statusPollTimer);
+    this.statusPollTimer = setTimeout(this._pollTickFn, delayMs);
+  }
+
+  applyStatusToSensors(status) {
+    if (this.obstructionService && typeof status.garageObstructed === 'boolean') {
+      if (this.lastObstructed !== status.garageObstructed) {
+        this.lastObstructed = status.garageObstructed;
+        const value = status.garageObstructed
+          ? Characteristic.ContactSensorState.CONTACT_NOT_DETECTED
+          : Characteristic.ContactSensorState.CONTACT_DETECTED;
+        this.obstructionService.updateCharacteristic(Characteristic.ContactSensorState, value);
+        this.log.info(`Obstruction ${status.garageObstructed ? 'DETECTED' : 'cleared'}`);
+      }
+    }
+    if (this.motionService && typeof status.garageMotion === 'boolean') {
+      if (this.lastMotion !== status.garageMotion) {
+        this.lastMotion = status.garageMotion;
+        this.motionService.updateCharacteristic(Characteristic.MotionDetected, status.garageMotion);
+        this.log.info(`Motion ${status.garageMotion ? 'detected' : 'cleared'}`);
+      }
+    }
+  }
+
+  // v1.1.0 — push a small allowlisted set of device-side settings to ratgdo
+  // on plugin init. Bundled into one /setgdo POST = one flash save (verified
+  // in homekit-ratgdo32 web.cpp; same trick the per-tap bundleTtcZero uses).
+  // Only keys with non-undefined values are sent, so users can opt in to
+  // managing one setting without needing to set them all.
+  async pushManagedSettings() {
+    const allowed = ['TTCseconds', 'occupancyDuration', 'lightHomeKit', 'motionHomeKit', 'LEDidle'];
+    const pairs = {};
+    for (const k of allowed) {
+      const v = this.deviceDefaults[k];
+      if (v !== undefined && v !== null && v !== '') pairs[k] = v;
+    }
+    if (Object.keys(pairs).length === 0) {
+      this.log.info('Manage device settings: enabled but no values set; skipping push.');
+      return;
+    }
+    this.log.info(`Pushing managed device settings to ratgdo: ${describePairs(pairs)}`);
+    await this.postSetGdoMulti(pairs);
   }
 
   async runForceClose() {

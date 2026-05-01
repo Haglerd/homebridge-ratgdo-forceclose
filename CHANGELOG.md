@@ -2,6 +2,30 @@
 
 All notable changes to this plugin are documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-04-30
+
+Additive feature release. Existing Force Close behavior is unchanged — every new feature is gated by an opt-in toggle, all of which default OFF. Existing v1.0.5 configs continue to work without modification.
+
+### Added
+
+- **Optional Reboot ratgdo switch.** Set `enableRebootButton: true` to register a second momentary HomeKit Switch ("`<name>` Reboot") that POSTs `/reboot` to ratgdo when tapped. Has its own cooldown (`rebootCooldownMs`, default 60s). The cached digest auth nonce is automatically cleared after a successful reboot so the next request re-challenges cleanly. Useful when ratgdo gets into a weird state and you'd otherwise have to open the device's IP in a browser.
+- **Optional Obstruction Contact Sensor.** Set `enableObstructionSensor: true` to register a HomeKit `ContactSensor` that mirrors `status.json.garageObstructed`. ContactSensorState semantics: `NOT_DETECTED` (contact open) when obstructed = alarm; `DETECTED` (contact closed) when clear = normal. Enable per-accessory notifications in iOS Home → Settings → Notifications to get a phone alert on every obstruction state change.
+- **Optional Motion Sensor.** Set `enableMotionSensor: true` to register a HomeKit `MotionSensor` mirroring `status.json.garageMotion`. Useful for activity-based automations.
+- **Status polling loop** powering both new sensors. Configurable interval (`statusPollIntervalMs`, default 3000ms, range 1000–60000). Polling pauses while the force-close or reboot is busy (don't pile load on ratgdo during the flash-write recovery window). Backs off 2× on transient connection errors so a struggling ratgdo doesn't get hammered. Only runs when at least one sensor is enabled — no extra load if sensors are off.
+- **Optional managed device settings.** Set `manageDeviceSettings: true` to push selected ratgdo settings from Homebridge config on plugin init. Allowlisted keys: `TTCseconds`, `occupancyDuration`, `lightHomeKit`, `motionHomeKit`, `LEDidle`. Each is independently optional — the plugin only sends keys you explicitly set, in a single bundled `/setgdo` POST = one flash save (same trick the per-tap `bundleTtcZero` uses). Lets users centralize a few common ratgdo settings in Homebridge instead of editing them in the device's web UI. Network/security/protocol settings are deliberately NOT exposed — they belong in the device's web UI.
+
+### Changed
+
+- `FirmwareRevision` characteristic on the AccessoryInformation service bumped from `1.0.5` → `1.1.0`.
+- Schema layout: three new collapsed fieldsets (`Optional — Reboot button`, `Optional — Sensors`, `Optional — Manage device settings`). Existing fieldsets unchanged.
+
+### Notes
+
+- All five v1.1.0 features default OFF. A user who upgrades from v1.0.5 and doesn't change config gets identical behavior — no new HomeKit services, no new background traffic.
+- HomeKit displays multiple services on a single accessory under one tile; users tap into the tile to access individual services. If you'd prefer separate tiles per service, that requires converting from `accessory` plugin → `platform` plugin (a future v2.0.0 change, not in scope here).
+- Reboot is `POST /reboot` per the homekit-ratgdo HTTP API. Per the firmware docs the endpoint is auth-exempt; in practice some installs return 401, which the existing digest-auth path handles transparently.
+- The polling interval intentionally starts conservative (3s). ratgdo's HTTP server is fragile under load (verified in v1.0.x debugging); shorter intervals risk increasing the chance of the firmware crash that v1.0.4 traced. Lower at your own risk.
+
 ## [1.0.5] — 2026-04-30
 
 Speed pass on the force-close sequence — confirmed via reading the homekit-ratgdo32 firmware source.
@@ -98,6 +122,7 @@ Initial public release on npm.
 - **CI workflow** (`.github/workflows/ci.yml`) — runs `node --check` and JSON validation on every PR.
 - **Tag-triggered npm publish workflow** (`.github/workflows/publish.yml`) using npm Trusted Publishing (OIDC) — no long-lived secrets.
 
+[1.1.0]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.1.0
 [1.0.5]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.0.5
 [1.0.4]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.0.4
 [1.0.3]: https://github.com/Haglerd/homebridge-ratgdo-forceclose/releases/tag/v1.0.3

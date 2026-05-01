@@ -94,6 +94,87 @@
         "minimum": 0,
         "maximum": 120000,
         "description": "Minimum time between consecutive force-close triggers. Prevents fat-finger re-tapping. Set to 0 to disable, but read the safety notice in the header first."
+      },
+      "enableRebootButton": {
+        "title": "Add a Reboot ratgdo switch",
+        "type": "boolean",
+        "default": false,
+        "description": "Adds a separate momentary HomeKit switch that POSTs /reboot to ratgdo when tapped. Useful when ratgdo gets into a weird state and the only fix is a reboot — saves a trip to the device's web UI."
+      },
+      "rebootCooldownMs": {
+        "title": "Reboot cooldown (ms)",
+        "type": "integer",
+        "default": 60000,
+        "minimum": 5000,
+        "maximum": 600000,
+        "description": "Minimum time between consecutive reboot triggers. ratgdo takes ~30s to come back; default 60s prevents accidental double-reboots."
+      },
+      "enableObstructionSensor": {
+        "title": "Add an Obstruction Contact Sensor",
+        "type": "boolean",
+        "default": false,
+        "description": "Adds a HomeKit ContactSensor that reflects ratgdo's obstruction state (status.json.garageObstructed). 'Open' = obstructed, 'Closed' = clear. Enable phone notifications for this sensor in iOS Home → Settings → Notifications to get alerted whenever ratgdo reports an obstruction. Updates whenever the polling loop sees a state change."
+      },
+      "enableMotionSensor": {
+        "title": "Add a Motion Sensor",
+        "type": "boolean",
+        "default": false,
+        "description": "Adds a HomeKit MotionSensor that mirrors ratgdo's motion detection (status.json.garageMotion). Useful for automations triggered by activity in the garage."
+      },
+      "statusPollIntervalMs": {
+        "title": "Status polling interval (ms)",
+        "type": "integer",
+        "default": 3000,
+        "minimum": 1000,
+        "maximum": 60000,
+        "description": "How often the plugin reads /status.json from ratgdo to update the obstruction/motion sensors. Only runs when at least one sensor is enabled. Polling pauses during a force-close or reboot. Backs off automatically on transient connection errors."
+      },
+      "manageDeviceSettings": {
+        "title": "Manage device settings from Homebridge",
+        "type": "boolean",
+        "default": false,
+        "description": "When ON, the plugin pushes the values from 'Device defaults' below to ratgdo's /setgdo endpoint on plugin init (one bundled flash write). Lets you centralize a few common ratgdo settings in Homebridge instead of editing them in the device's web UI. Requires a Homebridge child-bridge restart for changes to take effect (the values push on init)."
+      },
+      "deviceDefaults": {
+        "type": "object",
+        "title": "Device defaults pushed on init",
+        "description": "Optional values pushed to ratgdo when 'Manage device settings' is ON. Leave a field blank to NOT push that setting (the plugin only sends keys you actually set). Each setting has a safe range; the plugin clamps invalid values.",
+        "properties": {
+          "TTCseconds": {
+            "title": "Default time-to-close warning (seconds, 0–30)",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 30,
+            "description": "ratgdo's TTCseconds — the warning-beep window before a remote close. 0 disables the warning entirely. NOTE: per-tap force-close already temporarily sets this to 0 via 'Bundle TTCseconds=0'; this setting controls the BASELINE that normal HomeKit closes (not force-close) use."
+          },
+          "occupancyDuration": {
+            "title": "Occupancy hold-time (seconds, 30–3600)",
+            "type": "integer",
+            "minimum": 30,
+            "maximum": 3600,
+            "description": "How long ratgdo holds 'room occupied' after the last motion event. 180s = 3 minutes (typical default)."
+          },
+          "lightHomeKit": {
+            "title": "Expose GDO light to HomeKit (native)",
+            "type": "boolean",
+            "description": "ratgdo's own setting for whether the GDO light appears in HomeKit as a native Lightbulb (separate from this plugin)."
+          },
+          "motionHomeKit": {
+            "title": "Expose ratgdo motion to HomeKit (native)",
+            "type": "boolean",
+            "description": "ratgdo's own setting for whether motion appears in HomeKit natively (separate from this plugin's optional Motion sensor above)."
+          },
+          "LEDidle": {
+            "title": "LED behavior when idle",
+            "type": "integer",
+            "oneOf": [
+              { "title": "Off when idle", "enum": [0] },
+              { "title": "On when idle", "enum": [1] },
+              { "title": "Disabled", "enum": [2] }
+            ],
+            "description": "ratgdo's onboard LED behavior when nothing is happening."
+          }
+        }
       }
     }
   },
@@ -124,6 +205,34 @@
       "expandable": true,
       "expanded": false,
       "items": ["closeWaitMs", "postCloseSettleMs", "interStepMaxWaitMs", "cooldownMs", "bundleTtcZero"]
+    },
+    {
+      "type": "fieldset",
+      "title": "Optional — Reboot button (v1.1.0)",
+      "expandable": true,
+      "expanded": false,
+      "items": ["enableRebootButton", "rebootCooldownMs"]
+    },
+    {
+      "type": "fieldset",
+      "title": "Optional — Sensors (v1.1.0)",
+      "expandable": true,
+      "expanded": false,
+      "items": ["enableObstructionSensor", "enableMotionSensor", "statusPollIntervalMs"]
+    },
+    {
+      "type": "fieldset",
+      "title": "Optional — Manage device settings (v1.1.0)",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "manageDeviceSettings",
+        "deviceDefaults.TTCseconds",
+        "deviceDefaults.occupancyDuration",
+        "deviceDefaults.lightHomeKit",
+        "deviceDefaults.motionHomeKit",
+        "deviceDefaults.LEDidle"
+      ]
     }
   ]
 }
