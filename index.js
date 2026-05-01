@@ -402,7 +402,21 @@ class RatgdoForceCloseAccessory {
 
   scheduleNextPoll(delayMs) {
     if (this.statusPollTimer) clearTimeout(this.statusPollTimer);
-    this.statusPollTimer = setTimeout(this._pollTickFn, delayMs);
+    // Wrap the async tick in a sync catch — under HB 2.0's stricter Node
+    // 22 default an unhandled promise rejection inside a setTimeout
+    // callback will crash the child bridge. Belt-and-suspenders even
+    // though tick() already has its own try/catch.
+    this.statusPollTimer = setTimeout(() => {
+      Promise.resolve()
+        .then(() => this._pollTickFn())
+        .catch((err) => {
+          try { this.log.warn(`Status poll tick crashed: ${err && err.message}`); } catch (e) { /* ignore */ }
+          // Recurring schedule survives the crash — schedule the next tick
+          // with the backoff interval so we don't hammer ratgdo if it's
+          // returning errors.
+          this.scheduleNextPoll(this.statusPollIntervalMs * 2);
+        });
+    }, delayMs);
   }
 
   applyStatusToSensors(status) {
