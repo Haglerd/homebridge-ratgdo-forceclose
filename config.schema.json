@@ -214,42 +214,27 @@
     },
     {
       "type": "fieldset",
-      "title": "Advanced — setting toggle behavior",
-      "expandable": true,
-      "expanded": false,
-      "items": ["settingKey", "bypassValue", "normalValue"]
+      "title": "Mode (recommended defaults)",
+      "expandable": false,
+      "items": ["useForceClose", "forceCloseHoldMs", "presentAsGarageDoor", "cooldownMs"]
     },
     {
       "type": "fieldset",
-      "title": "Advanced — timing",
-      "expandable": true,
-      "expanded": false,
-      "items": ["closeWaitMs", "postCloseSettleMs", "interStepMaxWaitMs", "cooldownMs", "bundleTtcZero"]
-    },
-    {
-      "type": "fieldset",
-      "title": "Custom firmware — forceClose mode (v1.2.0)",
-      "expandable": true,
-      "expanded": false,
-      "items": ["useForceClose", "forceCloseHoldMs", "presentAsGarageDoor"]
-    },
-    {
-      "type": "fieldset",
-      "title": "Optional — Reboot button (v1.1.0)",
+      "title": "Optional — Reboot button",
       "expandable": true,
       "expanded": false,
       "items": ["enableRebootButton", "rebootCooldownMs"]
     },
     {
       "type": "fieldset",
-      "title": "Optional — Sensors (v1.1.0)",
+      "title": "Optional — Sensors",
       "expandable": true,
       "expanded": false,
       "items": ["enableObstructionSensor", "enableMotionSensor", "statusPollIntervalMs"]
     },
     {
       "type": "fieldset",
-      "title": "Optional — Manage device settings (v1.1.0)",
+      "title": "Optional — Push managed device settings to ratgdo on startup",
       "expandable": true,
       "expanded": false,
       "items": [
@@ -260,6 +245,14 @@
         "deviceDefaults.motionHomeKit",
         "deviceDefaults.LEDidle"
       ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Legacy obstFromStatus mode (v1.0.x compat — only relevant when useForceClose is OFF)",
+      "expandable": true,
+      "expanded": false,
+      "description": "These options are ONLY used when 'Use forceClose handler' is turned OFF (i.e. you're running vanilla upstream firmware without the forceClose patch). In default mode, the firmware handles everything internally and these are ignored.",
+      "items": ["settingKey", "bypassValue", "normalValue", "closeWaitMs", "postCloseSettleMs", "interStepMaxWaitMs", "bundleTtcZero"]
     }
   ]
 }

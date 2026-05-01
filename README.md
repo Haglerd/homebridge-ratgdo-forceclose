@@ -8,7 +8,12 @@
 
 </p>
 
-A Homebridge plugin that adds a momentary "Force Close" switch for [ratgdo](https://paulwieland.github.io/ratgdo/)-controlled garage doors, for cases when sun glare on the photo eye blocks normal HomeKit close.
+A Homebridge plugin that adds a HomeKit garage-door tile (or momentary switch) for [ratgdo](https://paulwieland.github.io/ratgdo/)-controlled garage doors, for cases when the photo-eye safety sensor is blocking a normal close — sun glare on the receiver, debris, or anything else.
+
+> [!IMPORTANT]
+> **v1.2.x recommended setup requires custom firmware.** The single-POST hold-to-close override (the only software path that closes past a fully-blocked photo eye) requires the forked firmware [`Haglerd/homekit-ratgdo32`](https://github.com/Haglerd/homekit-ratgdo32) v3.4.4-forceclose.5 or later. Vanilla upstream `ratgdo/homekit-ratgdo32` firmware does not have the `forceClose` HTTP handler. See [**Required firmware**](#required-firmware) below.
+>
+> The plugin still works against vanilla upstream firmware in legacy mode (`useForceClose: false`, `presentAsGarageDoor: false`) — same v1.0.x obstFromStatus dance — but that path only handles flickering false trips, not a fully-blocked beam.
 
 <p align="center">
 
@@ -20,19 +25,56 @@ A Homebridge plugin that adds a momentary "Force Close" switch for [ratgdo](http
 
 ## What this is
 
-A Homebridge accessory plugin that exposes a single momentary switch in HomeKit. On tap, it tells your ratgdo to ignore the obstruction sensor pin (briefly), sends the close command, waits for the door to finish closing, and then restores the original setting. The plugin uses ratgdo's existing `/setgdo` HTTP endpoint — no firmware modifications required.
+A Homebridge accessory plugin that exposes one of two HomeKit accessories for your ratgdo:
 
-It's not a replacement for HomeKit's normal garage-door integration. For everyday open/close, use [`homebridge-ratgdo`](https://github.com/hjdhjd/homebridge-ratgdo) (the full-featured ratgdo plugin) or HomeKit's native ratgdo support. **This plugin only exists for the situation where the door won't close because the obstruction sensor is being false-tripped** — typically by direct sun on the photo eye receiver.
+- **GarageDoorOpener tile** (default in v1.2.x): proper garage-door icon with live Open/Closed status. Slider to **Closed** triggers the firmware's hold-to-close override; slider to **Open** runs a normal open. State is driven by status polling so the tile updates as the door physically moves.
+- **Momentary Switch** (legacy v1.0.x style, set `presentAsGarageDoor: false`): single tap fires the close sequence, then the switch auto-resets.
+
+The plugin runs entirely over local HTTP to ratgdo's web UI. No cloud, no MQTT, no extra dependencies.
+
+## Two operating modes
+
+Same plugin, two HTTP-level strategies to make the door close. Pick based on what firmware your ratgdo runs.
+
+| | **forceClose mode** *(default, v1.2.x)* | **legacy obstFromStatus mode** *(v1.0.x compat)* |
+|---|---|---|
+| Plugin config | `useForceClose: true` *(default)* | `useForceClose: false` |
+| Required firmware | `Haglerd/homekit-ratgdo32` ≥ v3.4.4-forceclose.5 | Any `homekit-ratgdo32` (vanilla upstream included) |
+| What it sends | One POST `forceClose=3500` | POST `obstFromStatus=true` → POST `garageDoorState=0` → wait → POST `obstFromStatus=<original>` |
+| Closes past fully-blocked photo eye | **YES** (firmware emulates wall-button hold-to-close override) | NO (only handles flickering false reads) |
+| Triggers ratgdo flash write / reboot | NO | YES (obstFromStatus is a persistent setting) |
+| Time per tap | ~25 seconds | ~30–60 seconds (TTC + recovery + close + restore) |
+| Close confirmation reliability | High (firmware does 2-press internally) | Medium (depends on obstruction state) |
+
+**Most users want forceClose mode.** It's simpler, faster, and actually solves the photo-eye-blocked case. It's the default in v1.2.x. The only reason to use legacy mode is if you're running vanilla upstream firmware and don't want to flash a fork.
+
+## Required firmware
+
+### For default (forceClose) mode — recommended
+
+Flash [`Haglerd/homekit-ratgdo32`](https://github.com/Haglerd/homekit-ratgdo32) firmware v3.4.4-forceclose.5 or later to your ratgdo32. This is a fork of the upstream `ratgdo/homekit-ratgdo32` firmware with one feature added: a `forceClose` HTTP handler that simulates a real wall-button hold-to-close override at the Sec+1.0 protocol level — including the UL-mandated TTC warning sequence the GDO motor's override gate requires.
+
+**One-time flash:** download `homekit-ratgdo32-vX.X.X-forceclose.N.firmware.bin` from [Releases](https://github.com/Haglerd/homekit-ratgdo32/releases) and drop it onto ratgdo's web UI **Firmware Update** page.
+
+**After that, OTA just works:** the fork is configured with its own `gitUser` so ratgdo's "Check for update" button checks the fork's releases (not upstream's) and updates one-click. A daily auto-sync workflow keeps the fork rebased on top of upstream — when upstream ships a new version, the fork picks it up automatically and re-publishes with the `forceClose` patch applied. Maintenance is handled.
+
+### For legacy mode
+
+Any `homekit-ratgdo32` firmware works — vanilla upstream included. Set `useForceClose: false` and `presentAsGarageDoor: false` in plugin config to revert to v1.0.x behavior.
+
+### Not supported
+
+ESPHome ratgdo firmware. The plugin uses HTTP `/setgdo` POSTs which are a `homekit-ratgdo` family thing. ESPHome ratgdo uses a different protocol stack. For ESPHome firmware, use [`homebridge-ratgdo-esphome`](https://github.com/BMDan/homebridge-ratgdo-esphome) or [`homebridge-ratgdo`](https://github.com/hjdhjd/homebridge-ratgdo).
 
 ## What this plugin does NOT do
 
 To set expectations clearly:
 
-- **It does not open or close the door under normal conditions.** Use the regular ratgdo plugin for that. This plugin's switch only does the force-close sequence; it doesn't do anything on tap when the obstruction sensor isn't being false-tripped (the close still works, but the obstruction-bypass step is wasted motion).
-- **It does not expose ratgdo's other HomeKit accessories** — no obstruction sensor, no motion sensor, no light control, no lockout switch. Those are all in the regular ratgdo plugin.
-- **It does not work with ESPHome ratgdo firmware.** This plugin requires the `homekit-ratgdo` / `homekit-ratgdo32` firmware which exposes the `POST /setgdo` HTTP endpoint. ESPHome ratgdo uses a different protocol (ESPHome native API + SSE events). For ESPHome firmware, use [`homebridge-ratgdo-esphome`](https://github.com/BMDan/homebridge-ratgdo-esphome) or [`homebridge-ratgdo`](https://github.com/hjdhjd/homebridge-ratgdo) (which supports both).
 - **It does not auto-discover ratgdo devices.** You configure one accessory per door with the IP/host explicitly. (Most homes have one garage door; this is fine.)
 - **It does not work over the cloud.** Plugin → ratgdo communication is local-network only. (HomeKit access from outside your network still works via your HomeKit hub — Apple TV / HomePod / iPad — like any other HomeKit accessory.)
+- **It does not work with ESPHome ratgdo firmware.** This plugin requires the `homekit-ratgdo` / `homekit-ratgdo32` firmware which exposes the `POST /setgdo` HTTP endpoint. ESPHome ratgdo uses a different protocol stack — see [Required firmware](#required-firmware) above.
+- **It does not bypass the GDO motor's own UL safety logic** unless the firmware fork's hold-to-close override engages it. Even with `forceClose` mode, if the motor's own internal photo-eye sensor (separate from ratgdo's pin) sees a fully-blocked beam, it will reverse the door mid-close. The fork's firmware emulates the wall-button hold-to-close pattern that the motor recognizes as "user is overriding safety" — same UL-approved override the wall button gives you. If your install doesn't honor wall-button hold-to-close either, no software can fix it.
+- **It does not pair with HomeKit directly.** Goes through Homebridge. (For native HomeKit pairing, the firmware does that itself — separate accessory.)
 
 ## Two ways to use this
 
