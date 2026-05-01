@@ -96,10 +96,16 @@
         "description": "Minimum time between consecutive force-close triggers. Prevents fat-finger re-tapping. Set to 0 to disable, but read the safety notice in the header first."
       },
       "useForceClose": {
-        "title": "Use forceClose handler (custom firmware only)",
+        "title": "Use forceClose handler (custom firmware)",
         "type": "boolean",
-        "default": false,
-        "description": "When ON, the plugin sends a single POST forceClose=<ms> instead of the obstFromStatus/TTC dance. ratgdo simulates a wall-button hold-to-close — no flash write, no reboot, the only software path that closes past a fully-blocked photo eye. Requires a CUSTOM ratgdo firmware build that exposes the forceClose /setgdo handler (see README). Default OFF for compatibility with vanilla upstream firmware."
+        "default": true,
+        "description": "When ON (default), the plugin sends a single POST forceClose=<ms> and the firmware does the full 2-press hold-to-close override sequence internally. Requires v3.4.4-forceclose.5+ firmware. Turn OFF only if running vanilla upstream firmware that lacks the forceClose handler — falls back to the legacy obstFromStatus toggle dance."
+      },
+      "presentAsGarageDoor": {
+        "title": "Present as a HomeKit garage door tile",
+        "type": "boolean",
+        "default": true,
+        "description": "When ON (default), the accessory shows up in HomeKit as a proper Garage Door Opener tile (icon, Open/Closed status, slider). Slider→Closed runs force-close, slider→Open runs a normal open. State is driven by status polling so the tile updates as the door physically moves. Turn OFF for the legacy momentary-Switch UI from v1.0.x."
       },
       "forceCloseHoldMs": {
         "title": "forceClose hold duration (ms)",
@@ -225,7 +231,7 @@
       "title": "Custom firmware — forceClose mode (v1.2.0)",
       "expandable": true,
       "expanded": false,
-      "items": ["useForceClose", "forceCloseHoldMs"]
+      "items": ["useForceClose", "forceCloseHoldMs", "presentAsGarageDoor"]
     },
     {
       "type": "fieldset",

@@ -71,8 +71,21 @@ class RatgdoForceCloseAccessory {
     // pressed for the configured duration. This is the only software path
     // that closes past a fully-blocked photo-eye. Default OFF for safety
     // and for compatibility with vanilla upstream firmware.
-    this.useForceClose = !!this.config.useForceClose;
+    // v1.2.2: useForceClose defaults to TRUE. With v3.4.4-forceclose.5+
+    // firmware doing the auto-double-press internally, the new path is
+    // strictly better than the legacy obstFromStatus dance. Set to false
+    // explicitly to revert to the v1.0.x behavior (e.g. for vanilla
+    // upstream firmware without the forceClose handler).
+    this.useForceClose = this.config.useForceClose !== false;
     this.forceCloseHoldMs = clampInt(this.config.forceCloseHoldMs, 1000, 10000, 3500);
+
+    // v1.2.2: present as a HomeKit GarageDoorOpener instead of a Switch.
+    // Adds a proper garage-door tile (icon, Open/Closed state, slider).
+    // Slider to Closed → triggers force-close. Slider to Open → POSTs
+    // garageDoorState=1 (normal open). State driven by status polling
+    // (auto-enabled when this is true). Set to false to revert to the
+    // v1.0.x momentary-Switch UI.
+    this.presentAsGarageDoor = this.config.presentAsGarageDoor !== false;
 
     // Cooldown to prevent fat-finger re-trigger
     this.cooldownMs = clampInt(this.config.cooldownMs, 0, 120000, 20000);
@@ -129,13 +142,39 @@ class RatgdoForceCloseAccessory {
       .setCharacteristic(Characteristic.Manufacturer, 'DIY')
       .setCharacteristic(Characteristic.Model, 'Ratgdo Force Close')
       .setCharacteristic(Characteristic.SerialNumber, this.name.replace(/\s+/g, '-'))
-      .setCharacteristic(Characteristic.FirmwareRevision, '1.2.1');
+      .setCharacteristic(Characteristic.FirmwareRevision, '1.2.2');
 
-    this.switchService = new Service.Switch(this.name);
-    this.switchService
-      .getCharacteristic(Characteristic.On)
-      .onGet(async () => false)
-      .onSet(this.handleOnSet.bind(this));
+    // Last-known door state (driven by status poll) — used by the
+    // GarageDoorOpener service's CurrentDoorState getter and to decide
+    // whether to skip the force-close (already Closed).
+    this.lastDoorState = null;
+
+    if (this.presentAsGarageDoor) {
+      this.garageDoorService = new Service.GarageDoorOpener(this.name);
+      setServiceName(this.garageDoorService, this.name);
+      this.garageDoorService
+        .getCharacteristic(Characteristic.CurrentDoorState)
+        .onGet(async () => mapDoorStateToHK(this.lastDoorState));
+      this.garageDoorService
+        .getCharacteristic(Characteristic.TargetDoorState)
+        .onGet(async () => {
+          const cur = mapDoorStateToHK(this.lastDoorState);
+          return (cur === Characteristic.CurrentDoorState.OPEN || cur === Characteristic.CurrentDoorState.OPENING)
+            ? Characteristic.TargetDoorState.OPEN
+            : Characteristic.TargetDoorState.CLOSED;
+        })
+        .onSet(this.handleTargetDoorStateSet.bind(this));
+      this.garageDoorService
+        .getCharacteristic(Characteristic.ObstructionDetected)
+        .onGet(async () => !!this.lastObstructed);
+    } else {
+      this.switchService = new Service.Switch(this.name);
+      setServiceName(this.switchService, this.name);
+      this.switchService
+        .getCharacteristic(Characteristic.On)
+        .onGet(async () => false)
+        .onSet(this.handleOnSet.bind(this));
+    }
 
     // v1.1.0 — optional Reboot switch. POSTs /reboot to ratgdo. Stateless
     // momentary switch (auto-resets to Off after the request completes).
@@ -179,12 +218,20 @@ class RatgdoForceCloseAccessory {
       this.log.error('"ratgdoHost" is required (e.g. http://192.168.1.50)');
     }
 
-    this.log.info(
-      `[${this.name}] On tap: pre-flight read → POST ${this.settingKey}=${formatVal(this.bypassValue)}` +
-      `${this.bundleTtcZero ? '+TTCseconds=0' : ''} (if needed) → POST garageDoorState=0 → ` +
-      `poll for Closed (max ${this.closeWaitMs}ms) → settle ${this.postCloseSettleMs}ms → ` +
-      `POST ${this.settingKey}=<original>${this.bundleTtcZero ? '+TTCseconds=<original>' : ''} (if changed)`
-    );
+    if (this.useForceClose) {
+      this.log.info(
+        `[${this.name}] Mode: useForceClose ON — single POST forceClose=${this.forceCloseHoldMs}ms; firmware does the 2-press hold sequence internally. Requires v3.4.4-forceclose.5+ firmware on ratgdo.`
+      );
+    } else {
+      this.log.info(
+        `[${this.name}] Mode: legacy obstFromStatus toggle. POST ${this.settingKey}=${formatVal(this.bypassValue)}${this.bundleTtcZero ? '+TTCseconds=0' : ''} → POST garageDoorState=0 → poll Closed → restore.`
+      );
+    }
+    if (this.presentAsGarageDoor) {
+      this.log.info(`[${this.name}] HomeKit accessory: GarageDoorOpener (door tile). Slider→Closed runs force-close, slider→Open runs normal open.`);
+    } else {
+      this.log.info(`[${this.name}] HomeKit accessory: momentary Switch (legacy v1.0.x style).`);
+    }
 
     // v1.1.0 — async init. Push opted-in device defaults, then start the
     // sensor polling loop if any sensor is enabled. Both are best-effort and
@@ -193,17 +240,38 @@ class RatgdoForceCloseAccessory {
       this.pushManagedSettings()
         .catch((err) => this.log.warn(`Push managed settings failed: ${err.message}`));
     }
-    if ((this.enableObstructionSensor || this.enableMotionSensor) && this.ratgdoHost) {
+    if ((this.enableObstructionSensor || this.enableMotionSensor || this.presentAsGarageDoor) && this.ratgdoHost) {
       this.startStatusPolling();
     }
   }
 
   getServices() {
-    const services = [this.infoService, this.switchService];
+    const services = [this.infoService];
+    if (this.garageDoorService) services.push(this.garageDoorService);
+    if (this.switchService) services.push(this.switchService);
     if (this.rebootService) services.push(this.rebootService);
     if (this.obstructionService) services.push(this.obstructionService);
     if (this.motionService) services.push(this.motionService);
     return services;
+  }
+
+  // GarageDoorOpener TargetDoorState onSet — slider to Closed runs the
+  // force-close path (same as switch tap), slider to Open runs a normal
+  // open via /setgdo garageDoorState=1.
+  async handleTargetDoorStateSet(value) {
+    if (value === Characteristic.TargetDoorState.CLOSED) {
+      // Reuse handleOnSet's busy/cooldown/forceClose path — it does the
+      // right thing whether useForceClose is on or off.
+      return this.handleOnSet(true);
+    }
+    if (value === Characteristic.TargetDoorState.OPEN) {
+      try {
+        await this.postSetGdoMulti({ garageDoorState: 1 });
+        this.log.info('Open requested via HomeKit slider — POST garageDoorState=1');
+      } catch (err) {
+        this.log.error(`Open POST failed: ${err.message}`);
+      }
+    }
   }
 
   async handleOnSet(value) {
@@ -338,6 +406,31 @@ class RatgdoForceCloseAccessory {
   }
 
   applyStatusToSensors(status) {
+    // v1.2.2: drive the GarageDoorOpener tile from polled status. iOS Home
+    // shows Open/Closed/Opening/Closing on the tile in real time as the
+    // door physically moves — no manual refresh needed.
+    if (this.garageDoorService && typeof status.garageDoorState === 'string') {
+      if (this.lastDoorState !== status.garageDoorState) {
+        this.log.info(`Door state observed: ${this.lastDoorState || '(initial)'} → ${status.garageDoorState}`);
+        this.lastDoorState = status.garageDoorState;
+        const hkCur = mapDoorStateToHK(status.garageDoorState);
+        try { this.garageDoorService.updateCharacteristic(Characteristic.CurrentDoorState, hkCur); } catch (e) { /* ignore */ }
+        // TargetDoorState should track the direction we're heading. If
+        // door is Open/Opening, target is Open; if Closed/Closing, target
+        // is Closed. iOS uses this for the slider position.
+        const hkTgt = (hkCur === Characteristic.CurrentDoorState.OPEN || hkCur === Characteristic.CurrentDoorState.OPENING)
+          ? Characteristic.TargetDoorState.OPEN
+          : Characteristic.TargetDoorState.CLOSED;
+        try { this.garageDoorService.updateCharacteristic(Characteristic.TargetDoorState, hkTgt); } catch (e) { /* ignore */ }
+      }
+    }
+    if (this.garageDoorService && typeof status.garageObstructed === 'boolean') {
+      if (this.lastObstructed !== status.garageObstructed) {
+        // Drive ObstructionDetected on the door tile too (separate update
+        // from the optional ContactSensor service below).
+        try { this.garageDoorService.updateCharacteristic(Characteristic.ObstructionDetected, !!status.garageObstructed); } catch (e) { /* ignore */ }
+      }
+    }
     if (this.obstructionService && typeof status.garageObstructed === 'boolean') {
       if (this.lastObstructed !== status.garageObstructed) {
         this.lastObstructed = status.garageObstructed;
@@ -791,6 +884,22 @@ class RatgdoForceCloseAccessory {
 // shows "Force Close Garage" instead of the per-service label). Setting both
 // is the universally-supported fix. ConfiguredName might not exist in older
 // HAP-NodeJS — guard with a presence check instead of crashing.
+// Map ratgdo's garageDoorState string to HomeKit CurrentDoorState enum.
+// CurrentDoorState values: OPEN=0, CLOSED=1, OPENING=2, CLOSING=3, STOPPED=4.
+function mapDoorStateToHK(state) {
+  if (!Characteristic) return 0;
+  switch (state) {
+    case 'Open': return Characteristic.CurrentDoorState.OPEN;
+    case 'Closed': return Characteristic.CurrentDoorState.CLOSED;
+    case 'Opening': return Characteristic.CurrentDoorState.OPENING;
+    case 'Closing': return Characteristic.CurrentDoorState.CLOSING;
+    case 'Stopped': return Characteristic.CurrentDoorState.STOPPED;
+    // Unknown / null / pre-init — assume Open so iOS doesn't show
+    // "Closed" prematurely; will get corrected on first poll.
+    default: return Characteristic.CurrentDoorState.OPEN;
+  }
+}
+
 function setServiceName(service, name) {
   try { service.setCharacteristic(Characteristic.Name, name); } catch (e) { /* ignore */ }
   if (Characteristic.ConfiguredName) {
