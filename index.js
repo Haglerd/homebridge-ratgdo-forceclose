@@ -432,8 +432,23 @@ class RatgdoForceCloseAccessory {
       .then(() => this.log.info('Reconnect-HomeKit command sent. WiFi will cycle and HomeSpan will re-attach within ~10s.'))
       .catch((err) => this.log.error('Reconnect-HomeKit error:', err.message))
       .finally(() => {
-        this.reconnectHKBusy = false;
+        // v1.4.0: hold reconnectHKBusy for the WiFi-cycle window
+        // instead of releasing on POST completion. Firmware sends 200
+        // ~500ms after receiving the request (it ACKs THEN cycles
+        // WiFi), so without this hold the busy flag would clear within
+        // a second and the status-poll loop would resume against a
+        // device that's mid-WiFi-cycle, hammering it with retries
+        // during the 5–10s outage. Holding until cooldown elapses (or
+        // 10s minimum) gives the device time to come back cleanly.
         this.resetReconnectHKSwitch(500);
+        // Bounded [10s, 30s]: at least 10s for the WiFi-cycle window
+        // even if the user picked a short cooldown for re-trigger
+        // purposes, but capped at 30s so polling doesn't stay frozen
+        // longer than the device actually needs.
+        const holdMs = Math.max(10000, Math.min(this.reconnectHKCooldownMs, 30000));
+        setTimeout(() => {
+          this.reconnectHKBusy = false;
+        }, holdMs);
       });
   }
 

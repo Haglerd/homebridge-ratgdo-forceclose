@@ -2,6 +2,17 @@
 
 All notable changes to this plugin are documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] — 2026-05-02
+
+### Changed
+
+- **Reconnect HomeKit hold window.** `reconnectHKBusy` is now held for `min(reconnectHKCooldownMs, 30s)` (minimum 10s) after the POST instead of releasing on response completion. The firmware sends 200 ~500ms after receiving the request and THEN cycles WiFi (~5–10s outage); without the hold the status-poll loop would resume against a mid-cycle device and pile transient errors. Pairs with the `v3.4.4-forceclose.23` firmware change that defers the WiFi cycle off the request thread (so the 200 lands quickly).
+
+### Notes
+
+- No config schema change. Existing installs pick up the new behaviour automatically.
+- `cachedAuth` still preserved across reconnect (the device doesn't restart, the digest nonce stays valid). `/reboot` continues to clear it.
+
 ## [1.3.0] — 2026-05-02
 
 ### Added
