@@ -50,6 +50,21 @@ Same plugin, two HTTP-level strategies to make the door close. Pick based on wha
 
 **Most users want forceClose mode.** It's simpler, faster, and actually solves the photo-eye-blocked case. It's the default in v1.2.x. The only reason to use legacy mode is if you're running vanilla upstream firmware and don't want to flash a fork.
 
+## Optional accessories
+
+The plugin's primary accessory is the garage-door tile (or legacy switch). It can also expose four additional services on the same accessory tile, all opt-in and all default OFF:
+
+| Toggle | What it adds | Why |
+|---|---|---|
+| `enableRebootButton` | Momentary **Reboot** switch — POSTs `/reboot` to ratgdo | Fast recovery when ratgdo is in a weird state, without trekking to the device's web UI. |
+| `enableReconnectHKButton` *(v1.3.0+)* | Momentary **Reconnect HomeKit** switch — POSTs `/reconnectHomeKit` to ratgdo | Recovers iOS "No Response" on the ratgdo accessory in ~5–10s by cycling WiFi (HomeSpan re-attaches automatically). Lighter than a reboot — ratgdo stays running. **Requires `Haglerd/homekit-ratgdo32` ≥ v3.4.4-forceclose.16** for the `/reconnectHomeKit` endpoint. |
+| `enableObstructionSensor` | **Obstruction** ContactSensor mirroring `status.json.garageObstructed` | Get a phone notification (via iOS Home → Settings → Notifications) every time ratgdo flags an obstruction. |
+| `enableMotionSensor` | **Motion** Sensor mirroring `status.json.garageMotion` | Trigger HomeKit automations on garage activity. |
+
+Both sensors are driven by a status-poll loop (default 3s, tunable via `statusPollIntervalMs`). Polling pauses while a force-close, reboot, or reconnect is in flight so the plugin doesn't pile load on ratgdo when it's already busy.
+
+There's also an opt-in `manageDeviceSettings` mode that pushes a small set of ratgdo's own settings (TTC, occupancy duration, LED idle behaviour, native HomeKit light/motion toggles) on plugin init — useful if you want to centralize a couple of ratgdo settings in Homebridge instead of editing them in the device's web UI.
+
 ## Required firmware
 
 ### For default (forceClose) mode — recommended
@@ -83,7 +98,7 @@ To set expectations clearly:
 This repo offers two delivery mechanisms for the same underlying behavior:
 
 - **Homebridge plugin** (the rest of this README) — full HomeKit integration with a tappable switch in the Home app, remote access via your HomeKit hub, configurable cooldown, optional digest auth.
-- **HomeKit Shortcut** — no Homebridge required; build a one-off button in the iOS Shortcuts app that fires the same three-POST sequence over the local network. Build instructions: [`shortcut/README.md`](shortcut/README.md).
+- **HomeKit Shortcut** — no Homebridge required; build a one-off button in the iOS Shortcuts app that fires the same single `forceClose` POST over the local network. Build instructions: [`shortcut/README.md`](shortcut/README.md).
 
 Both options do exactly the same thing on ratgdo's side. See the comparison table further down to pick which one fits your setup.
 
@@ -104,10 +119,10 @@ The traditional workaround is to walk to the garage and **hold** the wall contro
 - ❌ [esphome-ratgdo](https://ratgdo.github.io/esphome-ratgdo/) — **not supported.** ESPHome firmware does not expose the `POST /setgdo` HTTP endpoint this plugin uses. For ESPHome firmware, use [`homebridge-ratgdo-esphome`](https://github.com/BMDan/homebridge-ratgdo-esphome) or [`homebridge-ratgdo`](https://github.com/hjdhjd/homebridge-ratgdo).
 
 **Garage-door opener** — works with any ratgdo-compatible opener:
-- Tested on Liftmaster Security+ 1.0 with homekit-ratgdo32 v3.4.4.
+- Tested on Liftmaster Security+ 1.0 with `Haglerd/homekit-ratgdo32` v3.4.4-forceclose.21.
 - Should work on Security+ 2.0 too but has not been verified.
 
-**Runtime** — Homebridge 1.6+ and Node.js 18+.
+**Runtime** — Homebridge 1.8+ (or 2.0 beta) and Node.js 18 / 20 / 22 / 24.
 
 ## Safety warning
 
@@ -186,7 +201,7 @@ sudo hb-service restart
 
 That's enough to get a working switch. Replace `192.168.1.50` with your ratgdo's actual IP or hostname.
 
-### Full config
+### Common config (forceClose mode + optional Reboot + Reconnect HomeKit)
 
 ```json
 {
@@ -197,11 +212,12 @@ That's enough to get a working switch. Replace `192.168.1.50` with your ratgdo's
       "ratgdoHost": "http://192.168.1.50",
       "username": "admin",
       "password": "your-password-here",
-      "settingKey": "obstFromStatus",
-      "bypassValue": true,
-      "normalValue": false,
-      "closeWaitMs": 18000,
-      "cooldownMs": 20000
+      "useForceClose": true,
+      "presentAsGarageDoor": true,
+      "forceCloseHoldMs": 3500,
+      "cooldownMs": 20000,
+      "enableRebootButton": true,
+      "enableReconnectHKButton": true
     }
   ]
 }
@@ -209,39 +225,97 @@ That's enough to get a working switch. Replace `192.168.1.50` with your ratgdo's
 
 ### Configuration reference
 
+#### Core
+
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `name` | string | `"Force Close Garage"` | The HomeKit name for the switch. |
+| `name` | string | `"Force Close Garage"` | The HomeKit name for the accessory tile. |
 | `ratgdoHost` | string | *(required)* | Base URL of your ratgdo, e.g. `http://192.168.1.50`. The `http://` prefix is added if you omit it. |
 | `username` | string | `null` | Only required if you've enabled "Require Password" in ratgdo's settings. |
 | `password` | string | `null` | Paired with `username`. The plugin uses HTTP Digest auth (which is what ratgdo uses). |
-| `settingKey` | string | `"obstFromStatus"` | Which ratgdo setting to toggle. Defaults to `obstFromStatus`. Switch to `pinBasedObst` and flip the bypass/normal booleans if the default doesn't work for your firmware. |
-| `bypassValue` | boolean | `true` | Value POSTed to `settingKey` before the close command. For `obstFromStatus`: `true` = use status messages, ignore the pin (the sun-flare false trip). |
-| `normalValue` | boolean | `false` | Value POSTed to `settingKey` after the close command — your normal pre-tap setting. |
-| `closeWaitMs` | integer | `18000` | Milliseconds to wait between sending close and restoring `settingKey`. Should comfortably exceed your door's full close duration. Min `1000`, max `60000`. |
-| `interStepMaxWaitMs` | integer | `15000` | Maximum ms to wait for ratgdo's HTTP server to be responsive between Step 1 and Step 2. The plugin actively polls GET `/status.json` every 250ms and proceeds the moment ratgdo answers — so on a healthy ratgdo Step 2 fires in <500ms. The 15s default is a ceiling for the worst case (firmware briefly crashes/restarts after a config-change POST). Min `1000`, max `60000`. |
 | `cooldownMs` | integer | `20000` | Minimum milliseconds between consecutive force-close triggers. Min `0`, max `120000`. |
+
+#### forceClose mode (default — recommended)
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `useForceClose` | boolean | `true` | When ON, sends a single POST `forceClose=<ms>` and lets the firmware run the full 2-press hold-to-close sequence internally. **Requires `Haglerd/homekit-ratgdo32` ≥ v3.4.4-forceclose.5.** |
+| `forceCloseHoldMs` | integer | `3500` | How long ratgdo simulates the wall-button hold. 3.5s covers most GDOs; bump to 4000–5000 if the motor refuses the hold. Range `1000`–`10000`. |
+| `presentAsGarageDoor` | boolean | `true` | When ON, the accessory is a HomeKit GarageDoorOpener tile (icon, Open/Closed status, slider). Slider→Closed runs force-close, slider→Open runs a normal open. State is driven by status polling so the tile reflects the door's actual position. Set OFF for the v1.0.x momentary-Switch UI. |
+
+#### Optional accessories (all default OFF — opt in to add the corresponding HomeKit service)
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enableRebootButton` | boolean | `false` | Adds a momentary **Reboot** switch that POSTs `/reboot` to ratgdo. |
+| `rebootCooldownMs` | integer | `60000` | Minimum ms between reboot triggers. ratgdo takes ~30s to come back; default 60s prevents accidental double-reboots. Range `5000`–`600000`. |
+| `enableReconnectHKButton` *(v1.3.0+)* | boolean | `false` | Adds a momentary **Reconnect HomeKit** switch that POSTs `/reconnectHomeKit` to ratgdo. Cycles WiFi so HomeSpan re-attaches — recovers iOS "No Response" without a full reboot. **Requires firmware ≥ v3.4.4-forceclose.16**, returns 404 on older firmware. |
+| `reconnectHKCooldownMs` *(v1.3.0+)* | integer | `30000` | Minimum ms between reconnect triggers. WiFi cycles in ~5–10s; default 30s. Range `5000`–`600000`. |
+| `enableObstructionSensor` | boolean | `false` | Adds a **ContactSensor** mirroring `status.json.garageObstructed`. Open = obstructed, Closed = clear. Enable phone notifications in iOS Home for obstruction alerts. |
+| `enableMotionSensor` | boolean | `false` | Adds a **MotionSensor** mirroring `status.json.garageMotion`. Useful for HomeKit automations on garage activity. |
+| `statusPollIntervalMs` | integer | `3000` | How often the plugin polls `/status.json` to drive the GarageDoorOpener tile + sensors. Polling pauses during force-close / reboot / reconnect. Range `1000`–`60000`. |
+
+#### Managed device settings (optional — push ratgdo settings on plugin init)
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `manageDeviceSettings` | boolean | `false` | When ON, the plugin pushes the values from `deviceDefaults` to ratgdo's `/setgdo` endpoint on init (one bundled flash write). Lets you centralize a couple of ratgdo settings in Homebridge. |
+| `deviceDefaults.TTCseconds` | integer | *(unset)* | Baseline TTC warning seconds (0–30) used by normal closes. Force-close still temporarily sets this to 0 via `bundleTtcZero`. |
+| `deviceDefaults.occupancyDuration` | integer | *(unset)* | Occupancy hold time in seconds (30–3600). |
+| `deviceDefaults.lightHomeKit` | boolean | *(unset)* | ratgdo's own toggle for whether the GDO light appears as a native HomeKit Lightbulb. |
+| `deviceDefaults.motionHomeKit` | boolean | *(unset)* | ratgdo's own toggle for whether motion appears in HomeKit natively. |
+| `deviceDefaults.LEDidle` | integer | *(unset)* | LED behaviour when idle: `0` off, `1` on, `2` disabled. |
+
+Leave any `deviceDefaults.*` field unset to NOT push that setting; the plugin only sends keys that are actually defined.
+
+#### Legacy obstFromStatus mode (only used when `useForceClose: false`)
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `settingKey` | string | `"obstFromStatus"` | Which ratgdo setting to toggle during the close. Switch to `pinBasedObst` and flip the bypass/normal booleans if the default doesn't work for your firmware. |
+| `bypassValue` | boolean | `true` | Value POSTed to `settingKey` before the close command. |
+| `normalValue` | boolean | `false` | FALLBACK ONLY — the plugin reads the current value pre-flight and restores it; this default is consulted only if the pre-flight read fails entirely. |
+| `bundleTtcZero` | boolean | `true` | Bundle `TTCseconds=0` into the same flash POST as `obstFromStatus` to skip the warning-beep window. Costs zero extra reboots. |
+| `closeWaitMs` | integer | `60000` | Max wait for the door to reach Closed between Step 2 and Step 3 (CEILING, not a fixed sleep — plugin polls every 500ms and proceeds the moment the door is Closed). Range `1000`–`180000`. |
+| `postCloseSettleMs` | integer | `8000` | Settle time after Closed before firing the Step 3 restore POST. Range `0`–`60000`. |
+| `interStepMaxWaitMs` | integer | `45000` | Max wait for ratgdo to be FULLY ready (HTTP responding AND `garageDoorState` non-Unknown) between Step 1 and Step 2. Range `1000`–`90000`. |
 
 ## How it works
 
-On every tap of the switch, the plugin runs a four-step POST sequence against ratgdo's `/setgdo` endpoint:
+### Default (forceClose) mode
 
-1. **`POST settingKey=bypassValue`** — temporarily change ratgdo's obstruction source. With the default `obstFromStatus=true`, this means "stop reading the sensor pin, only listen for obstruction in the GDO's own status messages." A short 300ms pause follows so the firmware has time to apply the new setting.
-2. **`POST garageDoorState=0`** — the close command itself. Because the obstruction source has been swapped, the false-tripped pin no longer blocks ratgdo from issuing close.
-3. **Wait `closeWaitMs`** — give the door time to finish its travel cycle. Default 18s is safe for most residential doors.
-4. **`POST settingKey=normalValue`** — restore the original setting (default `obstFromStatus=false`, i.e. read obstruction from the pin again). This step runs in a `finally` block, so even if step 2 or 3 throws, the bypass setting is restored before the function returns. If step 4 itself fails, the plugin logs a CRITICAL warning telling you to restore the setting manually in ratgdo's web UI.
+When `useForceClose: true` (the default), every tap collapses the close into a single POST against ratgdo's `/setgdo` endpoint:
+
+1. **Pre-flight `GET /status.json`** — read current door state. If the door is already `Closed`, exit early; nothing to do.
+2. **`POST forceClose=<forceCloseHoldMs>`** (default `3500` ms) — the firmware fork takes over from here, simulating a real wall-button hold-to-close override at the Sec+1.0 protocol level. That override is the only software path that closes past a fully-blocked photo eye, because it's the same pattern the GDO's own UL-approved override gate is designed to recognize.
+3. **Status polling** — the plugin watches `garageDoorState` transition through `Closing` → `Closed` so the HomeKit tile reflects reality. If the door doesn't enter `Closing` within ~5s, the plugin auto-retries up to 3 times (some Sec+ 1.0 motors treat the first hold as accidental). No extra POSTs are fired — each retry is a fresh `forceClose`.
+
+No flash writes, no firmware reboots, no obstFromStatus toggling. The whole sequence completes in ~25 seconds.
+
+### Legacy (obstFromStatus) mode
+
+When `useForceClose: false`, the plugin falls back to the v1.0.x four-step sequence — useful if you're running vanilla upstream firmware that doesn't have the `forceClose` HTTP handler:
+
+1. **`POST settingKey=bypassValue`** — temporarily change ratgdo's obstruction source. With the default `obstFromStatus=true`, this means "stop reading the sensor pin, only listen for obstruction in the GDO's own status messages." Bundled with `TTCseconds=0` (when `bundleTtcZero: true`) to skip the warning-beep window in the same flash write.
+2. **Wait for ratgdo to come back** — flash writes briefly crash/restart ratgdo; the plugin polls `/status.json` until the device responds AND `garageDoorState` is a valid (non-Unknown) value before proceeding.
+3. **`POST garageDoorState=0`** — the close command itself.
+4. **Wait for `Closed`, then settle, then restore** — once the door reports Closed, the plugin waits `postCloseSettleMs` (default 8s) and POSTs the original `settingKey` value back along with the original `TTCseconds`. This step runs in a `finally` block, so the bypass setting is always restored even if the close itself fails. If the restore POST itself fails, the plugin logs a CRITICAL warning telling you to fix the setting manually in ratgdo's web UI.
 
 The setting being toggled (`obstFromStatus`) corresponds to the **"Get obstruction from GDO status messages"** checkbox on ratgdo's settings page. If you want to see what state your ratgdo is in, that's the field to check.
 
 ## Troubleshooting
 
-- **The switch flips on and immediately flips off but the door doesn't move.** Check Homebridge logs (`sudo hb-service logs`) for a non-200 response from `/setgdo` or a digest-auth failure. If you've enabled "Require Password" on ratgdo, make sure `username` and `password` are set in the plugin config.
+- **The switch flips on and immediately flips off but the door doesn't move.** Check Homebridge logs (`sudo hb-service logs`) for a non-200 response from `/setgdo` or a digest-auth failure. If you've enabled "Require Password" on ratgdo, make sure `username` and `password` are set in the plugin config. If the firmware version on the device is older than `v3.4.4-forceclose.5`, the `forceClose` POST returns an error — either flash the fork or set `useForceClose: false` to fall back to legacy mode.
 
-- **The switch fires the sequence but the door still doesn't close.** This means the obstruction is being seen by the opener itself, not just propagated through ratgdo. Try the inverse setting: change `settingKey` to `pinBasedObst` and flip the booleans — `bypassValue: false`, `normalValue: true`. That tells ratgdo "stop reading the obstruction pin entirely" instead of just changing the source.
+- **forceClose mode: the firmware sequence runs but the motor refuses the hold.** Some Sec+ 1.0 GDOs treat the default 3.5s hold as too short. Bump `forceCloseHoldMs` to `4500` or `5000` in the plugin config and retry. Watch the ratgdo log (`http://YOUR-RATGDO-IP/showlog`) — you should see `Door state changing from Open to Closing` after the `forceClose` POST; if it never enters Closing, the hold isn't long enough.
 
-- **Neither setting works.** The photo eye is being blinded at the hardware level — ratgdo can't help here because the obstruction signal is already locked in at the opener's logic board. The actual fix is a sun shroud or hood over the photo-eye receiver (search "garage door photo eye sun shield"). A piece of black PVC pipe works in a pinch.
+- **Legacy mode: the switch fires the sequence but the door still doesn't close.** This means the obstruction is being seen by the opener itself, not just propagated through ratgdo. Try the inverse setting: change `settingKey` to `pinBasedObst` and flip the booleans — `bypassValue: false`, `normalValue: true`. That tells ratgdo "stop reading the obstruction pin entirely" instead of just changing the source. (forceClose mode bypasses this whole class of problem because it doesn't depend on ratgdo seeing the obstruction signal at all.)
 
-- **Where to look at logs.** Homebridge: `sudo hb-service logs`. ratgdo's own log: `http://YOUR-RATGDO-IP/showlog`. The plugin logs each step of the four-step sequence with `[Force Close Garage]` prefixes (or whatever name you configured).
+- **Neither setting works (and forceClose mode also fails).** The photo eye is being blinded at the hardware level AND the GDO motor is refusing the hold-to-close override — ratgdo can't help here because the obstruction signal is locked in at the opener's logic board AND the motor isn't honoring the override pattern. The actual fix is a sun shroud or hood over the photo-eye receiver (search "garage door photo eye sun shield"). A piece of black PVC pipe works in a pinch.
+
+- **iOS Home shows "No Response" for the ratgdo accessory.** This is a HomeKit hub-side cache issue, not a device problem — the device itself is reachable on its IP, you just can't talk to it through Home. Tap the optional **Reconnect HomeKit** switch (when `enableReconnectHKButton` is on) to cycle ratgdo's WiFi and force HomeSpan to re-attach. Ratgdo log will show `WiFi disconnected → WiFi connected → mDNS advertised`. iOS usually un-greys the accessory within ~10s. Requires firmware ≥ v3.4.4-forceclose.16.
+
+- **Where to look at logs.** Homebridge: `sudo hb-service logs`. ratgdo's own log: `http://YOUR-RATGDO-IP/showlog`. The plugin logs each step of the close sequence with `[Force Close Garage]` prefixes (or whatever name you configured).
 
 - **Cooldown active error.** You tapped the switch too soon after the previous tap. Wait for the configured `cooldownMs` to elapse. Default is 20 seconds.
 
