@@ -1,7 +1,7 @@
 {
   "name": "homebridge-ratgdo-forceclose",
   "displayName": "Ratgdo Force Close",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "scripts": {
     "test": "node tests/smoke.test.js"
   },
