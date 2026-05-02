@@ -117,6 +117,13 @@ class RatgdoForceCloseAccessory {
     // existing force-close sequence.
     this.enableRebootButton = !!this.config.enableRebootButton;
     this.rebootCooldownMs = clampInt(this.config.rebootCooldownMs, 5000, 600000, 60000);
+    // v1.3.0 — Reconnect HomeKit switch. Stateless tile that POSTs
+    // /reconnectHomeKit to the device, which cycles WiFi (HomeSpan
+    // re-attaches automatically). Hand-recovery for "No Response" without
+    // a full reboot. Requires the v3.4.4-forceclose.16+ firmware that
+    // ships the /reconnectHomeKit + /refreshHomeKitMDNS endpoints.
+    this.enableReconnectHKButton = !!this.config.enableReconnectHKButton;
+    this.reconnectHKCooldownMs = clampInt(this.config.reconnectHKCooldownMs, 5000, 600000, 30000);
     this.enableObstructionSensor = !!this.config.enableObstructionSensor;
     this.enableMotionSensor = !!this.config.enableMotionSensor;
     this.statusPollIntervalMs = clampInt(this.config.statusPollIntervalMs, 1000, 60000, 3000);
@@ -128,6 +135,11 @@ class RatgdoForceCloseAccessory {
     // Reboot state (separate from force-close busy/cooldown).
     this.rebootBusy = false;
     this.lastRebootAt = 0;
+
+    // Reconnect HomeKit state. Cheaper than a reboot — cycles WiFi only,
+    // ratgdo stays available within ~5-10s.
+    this.reconnectHKBusy = false;
+    this.lastReconnectHKAt = 0;
 
     // Last-observed sensor states — used by the polling loop to diff before
     // calling updateCharacteristic, so HomeKit only sees real edges.
@@ -187,6 +199,20 @@ class RatgdoForceCloseAccessory {
         .getCharacteristic(Characteristic.On)
         .onGet(async () => false)
         .onSet(this.handleRebootOnSet.bind(this));
+    }
+
+    // v1.3.0 — optional Reconnect HomeKit switch. Stateless momentary
+    // switch — tap it when iOS shows "No Response" and the firmware
+    // cycles WiFi to force HomeSpan to re-attach. Lighter-touch than
+    // Reboot (no boot delay; ratgdo stays running). Requires
+    // v3.4.4-forceclose.16+ firmware on the ratgdo.
+    if (this.enableReconnectHKButton) {
+      this.reconnectHKService = new Service.Switch('Reconnect HomeKit', 'reconnect-hk');
+      setServiceName(this.reconnectHKService, 'Reconnect HomeKit');
+      this.reconnectHKService
+        .getCharacteristic(Characteristic.On)
+        .onGet(async () => false)
+        .onSet(this.handleReconnectHKOnSet.bind(this));
     }
 
     // v1.1.0 — optional Obstruction ContactSensor. Mirrors status.json's
@@ -250,6 +276,7 @@ class RatgdoForceCloseAccessory {
     if (this.garageDoorService) services.push(this.garageDoorService);
     if (this.switchService) services.push(this.switchService);
     if (this.rebootService) services.push(this.rebootService);
+    if (this.reconnectHKService) services.push(this.reconnectHKService);
     if (this.obstructionService) services.push(this.obstructionService);
     if (this.motionService) services.push(this.motionService);
     return services;
@@ -375,6 +402,65 @@ class RatgdoForceCloseAccessory {
     this.cachedAuth = null;
   }
 
+  // v1.3.0 — Reconnect HomeKit switch handler. Mirrors handleRebootOnSet:
+  // cooldown gate, busy gate, host-configured gate, then async runReconnectHK
+  // in the background while the switch auto-resets.
+  async handleReconnectHKOnSet(value) {
+    if (!value) return;
+
+    const since = Date.now() - this.lastReconnectHKAt;
+    if (since < this.reconnectHKCooldownMs) {
+      const remain = Math.ceil((this.reconnectHKCooldownMs - since) / 1000);
+      this.log.warn(`Reconnect-HomeKit cooldown active, ${remain}s remaining. Ignoring.`);
+      this.resetReconnectHKSwitch(800);
+      return;
+    }
+    if (this.reconnectHKBusy) {
+      this.log.warn('Reconnect-HomeKit already in progress. Ignoring.');
+      this.resetReconnectHKSwitch(800);
+      return;
+    }
+    if (!this.ratgdoHost) {
+      this.log.error('ratgdoHost not configured. Aborting reconnect-HomeKit.');
+      this.resetReconnectHKSwitch(800);
+      return;
+    }
+
+    this.reconnectHKBusy = true;
+    this.lastReconnectHKAt = Date.now();
+    this.runReconnectHK()
+      .then(() => this.log.info('Reconnect-HomeKit command sent. WiFi will cycle and HomeSpan will re-attach within ~10s.'))
+      .catch((err) => this.log.error('Reconnect-HomeKit error:', err.message))
+      .finally(() => {
+        this.reconnectHKBusy = false;
+        this.resetReconnectHKSwitch(500);
+      });
+  }
+
+  resetReconnectHKSwitch(delayMs) {
+    if (!this.reconnectHKService) return;
+    setTimeout(() => {
+      try {
+        this.reconnectHKService.updateCharacteristic(Characteristic.On, false);
+      } catch (e) { /* ignore */ }
+    }, delayMs);
+  }
+
+  // POST /reconnectHomeKit. Firmware cycles WiFi, HomeSpan re-attaches
+  // automatically. The endpoint goes through the standard auth path
+  // (digest if a www password is configured), unlike /reboot which is
+  // auth-exempt. Cached auth nonce remains valid since the device
+  // didn't restart — no need to clear cachedAuth.
+  async runReconnectHK() {
+    this.log.info('Sending reconnect-HomeKit command to ratgdo');
+    const url = `${this.ratgdoHost}/reconnectHomeKit`;
+    await this.httpRequestWithAuth(url, {
+      method: 'POST',
+      headers: { 'Connection': 'close', 'Content-Length': '0' },
+      timeoutMs: 5000,
+    });
+  }
+
   // v1.1.0 — periodic status polling for Obstruction + Motion sensors.
   // Skips while the force-close or reboot is busy (no point polling during
   // a flash-write recovery window). Backs off 2x on transient errors so we
@@ -383,7 +469,7 @@ class RatgdoForceCloseAccessory {
     this.log.info(`Starting status polling every ${this.statusPollIntervalMs}ms for sensors`);
 
     const tick = async () => {
-      if (this.busy || this.rebootBusy) {
+      if (this.busy || this.rebootBusy || this.reconnectHKBusy) {
         this.scheduleNextPoll(this.statusPollIntervalMs);
         return;
       }
