@@ -1,14 +1,14 @@
 {
   "name": "homebridge-ratgdo-forceclose",
   "displayName": "Ratgdo Force Close",
-  "version": "1.2.6",
+  "version": "1.2.7",
   "scripts": {
     "test": "node tests/smoke.test.js"
   },
   "description": "HomeKit GarageDoorOpener for ratgdo-controlled Security+ 1.0 garage doors that ignores false photo-eye obstructions. Sends a single forceClose POST to the ratgdo, which performs the wall-button hold-to-close override on the device side. Requires the Haglerd/homekit-ratgdo32 firmware fork.",
   "main": "index.js",
   "engines": {
-    "node": "^18.20.0 || ^20.0.0 || ^22.0.0",
+    "node": "^18.20.0 || ^20.0.0 || ^22.0.0 || ^24.0.0",
     "homebridge": "^1.8.0 || ^2.0.0-beta.0"
   },
   "funding": "https://github.com/sponsors/Haglerd",

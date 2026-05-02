@@ -2,6 +2,12 @@
 
 All notable changes to this plugin are documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.7] — 2026-05-01
+
+### Changed
+
+- Add Node.js 24.x to the supported `engines.node` range. Plugin is pure JavaScript with no native dependencies, so the previous engines list was conservative — Homebridge Pi installs running Node 24 (e.g. via the Homebridge UI's bundled `/opt/homebridge/bin/node`) were emitting a "does not satisfy" warning at every boot. No code changes; behavior identical to 1.2.6.
+
 ## [1.2.1] — 2026-04-30
 
 ### Fixed
