@@ -127,6 +127,20 @@
         "maximum": 600000,
         "description": "Minimum time between consecutive reboot triggers. ratgdo takes ~30s to come back; default 60s prevents accidental double-reboots."
       },
+      "enableReconnectHKButton": {
+        "title": "Add a Reconnect HomeKit switch",
+        "type": "boolean",
+        "default": false,
+        "description": "Adds a separate momentary HomeKit switch that POSTs /reconnectHomeKit to ratgdo when tapped. Cycles WiFi on the device so HomeSpan re-attaches — useful when iOS shows 'No Response' for the ratgdo accessory and you want a quick fix without a full reboot. Requires v3.4.4-forceclose.16+ firmware on the ratgdo (older firmware lacks the /reconnectHomeKit endpoint)."
+      },
+      "reconnectHKCooldownMs": {
+        "title": "Reconnect HomeKit cooldown (ms)",
+        "type": "integer",
+        "default": 30000,
+        "minimum": 5000,
+        "maximum": 600000,
+        "description": "Minimum time between consecutive reconnect-HomeKit triggers. WiFi cycles in ~5–10s; default 30s prevents accidental double-cycles while HomeSpan is still re-attaching."
+      },
       "enableObstructionSensor": {
         "title": "Add an Obstruction Contact Sensor",
         "type": "boolean",
@@ -222,6 +236,13 @@
       "expandable": true,
       "expanded": false,
       "items": ["enableRebootButton", "rebootCooldownMs"]
+    },
+    {
+      "type": "fieldset",
+      "title": "Optional — Reconnect HomeKit button",
+      "expandable": true,
+      "expanded": false,
+      "items": ["enableReconnectHKButton", "reconnectHKCooldownMs"]
     },
     {
       "type": "fieldset",

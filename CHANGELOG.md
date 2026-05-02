@@ -2,6 +2,19 @@
 
 All notable changes to this plugin are documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-05-02
+
+### Added
+
+- **`enableReconnectHKButton` option** (default `false`). Adds a momentary HomeKit switch labeled "Reconnect HomeKit" that POSTs `/reconnectHomeKit` to ratgdo when tapped. The firmware cycles WiFi and HomeSpan re-attaches automatically — recovers iOS "No Response" on the ratgdo accessory in ~5–10s without a full reboot. Mirrors the in-firmware home-page button shipped in `v3.4.4-forceclose.16`.
+- **`reconnectHKCooldownMs` option** (default `30000`, range `5000`–`600000`). Minimum time between consecutive reconnect-HomeKit triggers; prevents accidental double-cycles while HomeSpan is still re-attaching.
+- The status-poll loop now also pauses while a reconnect-HomeKit is in flight (parallel to the existing reboot pause), so polling doesn't pile load on the device while WiFi is cycling.
+
+### Notes
+
+- Requires `v3.4.4-forceclose.16` or later on the ratgdo. Older firmware does not expose `/reconnectHomeKit` and will return 404 on tap. The standard digest-auth fallback applies if the ratgdo has a www password set.
+- The cached digest-auth nonce is preserved across the reconnect (the device doesn't restart, so the nonce is still valid). Contrasts with `/reboot`, which clears the cache.
+
 ## [1.2.7] — 2026-05-01
 
 ### Changed
