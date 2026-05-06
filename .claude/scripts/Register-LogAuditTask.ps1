@@ -6,7 +6,8 @@
 param(
     [int]$IntervalHours = 6,
     [string]$StartTime = '06:30',
-    [string]$TaskName = 'Claude-LogAuditAndFix-homebridge-ratgdo-forceclose'
+    [string]$TaskName = 'Claude-LogAuditAndFix-homebridge-ratgdo-forceclose',
+    [switch]$Disabled
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,13 +44,29 @@ $Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interac
 $Task = New-ScheduledTask -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal `
     -Description "Runs /log-audit-and-fix for homebridge-ratgdo-forceclose every $IntervalHours hours. Pulls Homebridge journalctl, queues findings, runs auto-fix pipeline through PR."
 
-Register-ScheduledTask -TaskName $TaskName -InputObject $Task -Force
+Register-ScheduledTask -TaskName $TaskName -InputObject $Task -Force | Out-Null
+
+if ($Disabled) {
+    Disable-ScheduledTask -TaskName $TaskName | Out-Null
+    Write-Host ""
+    Write-Host "Registered (DISABLED): $TaskName"
+    Write-Host "  Trigger:    every $IntervalHours hours starting $StartTime"
+    Write-Host "  Run script: $RunScript"
+    Write-Host "  Logs:       $env:USERPROFILE\.claude\log-audit-history\"
+    Write-Host ""
+    Write-Host "Task is INSTALLED BUT NOT FIRING. To enable when ready:"
+    Write-Host "  Enable-ScheduledTask -TaskName '$TaskName'"
+}
+else {
+    Write-Host ""
+    Write-Host "Registered + ENABLED: $TaskName"
+    Write-Host "  Trigger:    every $IntervalHours hours starting $StartTime"
+    Write-Host "  Run script: $RunScript"
+    Write-Host "  Logs:       $env:USERPROFILE\.claude\log-audit-history\"
+}
 
 Write-Host ""
-Write-Host "✓ Registered scheduled task: $TaskName"
-Write-Host "  Trigger: every $IntervalHours hours starting $StartTime"
-Write-Host "  Run script: $RunScript"
-Write-Host "  Logs: $env:USERPROFILE\.claude\log-audit-history\"
-Write-Host ""
-Write-Host "Inspect: Get-ScheduledTask -TaskName '$TaskName'"
-Write-Host "Run now: Start-ScheduledTask -TaskName '$TaskName'"
+Write-Host "Inspect:  Get-ScheduledTask -TaskName '$TaskName'"
+Write-Host "Run now:  Start-ScheduledTask -TaskName '$TaskName'"
+Write-Host "Disable:  Disable-ScheduledTask -TaskName '$TaskName'"
+Write-Host "Remove:   Unregister-ScheduledTask -TaskName '$TaskName' -Confirm:`$false"
