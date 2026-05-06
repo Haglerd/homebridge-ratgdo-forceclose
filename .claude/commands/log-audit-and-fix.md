@@ -21,7 +21,7 @@ A finding can be picked for auto-fix ONLY IF all of these are true:
 - **NOT** touching > 3 files
 - **Recurrence count >= 2** OR **severity P0**
 
-Only ONE auto-fix per run.
+Sort by priority (P0 first, then P1) and earliest recurrence; auto-fix up to **5 items per run**. Each gets its own commit + PR. Branch-shift guard fires between items — stops the batch if branch shifted mid-run.
 
 ## Hard stops
 
@@ -41,6 +41,6 @@ Only ONE auto-fix per run.
 ## Don't
 
 - Don't merge the PR. PR is the review gate.
-- Don't run > 1 fix per invocation.
+- Don't run > 5 fixes per invocation (current cap; adjust here if needed).
 - Don't auto-pick force-close state-machine items.
 - Don't run /audit automatically.
