@@ -2,7 +2,7 @@
 name: planner
 description: Plan TypeScript Homebridge plugin changes. Hand off to software-engineer.
 tools: Read, Glob, Grep, Bash
-model: sonnet
+model: opus
 ---
 
 # Planner — homebridge-ratgdo-forceclose

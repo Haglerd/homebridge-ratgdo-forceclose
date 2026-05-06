@@ -16,5 +16,19 @@
       "Bash(git push -f *)",
       "Bash(git reset --hard *)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-bash-fork-check.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
   }
 }
