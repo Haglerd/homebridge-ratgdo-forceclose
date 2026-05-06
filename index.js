@@ -1081,12 +1081,20 @@ function httpRequest(urlStr, { method = 'GET', headers = {}, body = null, timeou
     catch (e) { return reject(new Error(`Invalid URL: ${urlStr}`)); }
 
     const lib = u.protocol === 'https:' ? https : http;
+    // v1.4.1: derive Origin from the request URL so homekit-ratgdo32's
+    // enforce_same_origin() CSRF guard accepts our state-changing POSTs.
+    // The device exact-matches Origin host against its Host header (port-
+    // stripped, lowercased) — `${protocol}//${u.host}` produces the form
+    // that always matches. Caller-supplied headers override (spread last)
+    // so callers can pass an explicit Origin if a reverse-proxy fronts
+    // the device. u.host omits default ports (80/443), matching the Host
+    // header form Node sends.
     const opts = {
       method,
       hostname: u.hostname,
       port: u.port || (u.protocol === 'https:' ? 443 : 80),
       path: u.pathname + u.search,
-      headers: { ...headers },
+      headers: { 'Origin': `${u.protocol}//${u.host}`, ...headers },
       timeout: timeoutMs,
     };
     if (body != null) opts.headers['Content-Length'] = Buffer.byteLength(body);

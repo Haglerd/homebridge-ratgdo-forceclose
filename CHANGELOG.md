@@ -2,6 +2,17 @@
 
 All notable changes to this plugin are documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] — 2026-05-05
+
+### Fixed
+
+- **State-changing POSTs were rejected with `403 Forbidden: missing Origin/Referer`** on `homekit-ratgdo32` v3.4.4-forceclose.31 and later (any device with `enforce_same_origin()` in fail-closed mode — v31 hardening onward). Symptoms: `/setgdo` (open / close / forceClose), `/reboot`, `/reconnectHomeKit`, `/refreshHomeKitMDNS` all 403'd; the plugin's status poll (`/status.json`, GET) was unaffected because it doesn't go through the CSRF guard. Root cause: `httpRequest()` did not send an `Origin` header, and the device's same-origin guard rejects requests where both `Origin` AND `Referer` are absent. Fix: derive `Origin` from the request URL (`${protocol}//${u.host}`, with `u.host` omitting default ports to match the device's lowercased port-stripped Host comparison) and inject it into every outbound request. Caller-supplied headers still override (spread last) so reverse-proxy deployments can pass an explicit Origin if the public hostname differs from the device IP. No config change required; existing installs pick up the fix on plugin restart.
+
+### Notes
+
+- This was a long-standing latent issue — the device hardening landed in `v3.4.4-forceclose.31` and would have produced 403s on any plugin install pointing at v31+ firmware. It surfaced visibly during a v44 deployment because the user had the active reboot/reconnect/forceClose paths exercising under load. Status polling (GET `/status.json`) is unauthenticated and bypasses the CSRF guard, so the `Door state observed` lines kept flowing — masking the auth-side break.
+- No firmware-side change needed; `enforce_same_origin()` is correct security behavior. The plugin was the broken party.
+
 ## [1.4.0] — 2026-05-02
 
 ### Changed
