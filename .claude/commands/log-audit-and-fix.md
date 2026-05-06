@@ -25,13 +25,23 @@ A finding can be picked for auto-fix ONLY IF all of these are true:
 
 Sort by priority (P0 first, then P1) and earliest recurrence; auto-fix up to **5 items per run**. Each gets its own commit + PR. Branch-shift guard fires between items — stops the batch if branch shifted mid-run.
 
+## Recovery from hook fires (autonomy: fix the fix, don't abort)
+
+| Hook | Auto-recovery |
+|------|---------------|
+| AI-attribution | strip forbidden patterns from commit message, retry |
+| Branch-shift | `git checkout main && git pull --ff-only origin main`, reset stamp, retry |
+| Fork-PR | rebuild `gh pr create` with `--repo Haglerd/homebridge-ratgdo-forceclose`, retry |
+| `npx tsc --noEmit` fails | invoke software-engineer to fix the type errors, retry tsc |
+| `npm test` fails | invoke software-engineer to fix the failing test (or the production code if test is correct and code is wrong), retry test |
+
+3-retry budget per hook+item. After exhaustion, mark `in-progress (auto-fix exhausted)` and continue to next item.
+
 ## Hard stops
 
-- Branch-guard hook flags branch shift → abort
-- Fork-PR hook would block → abort
-- AI-attribution hook would block → abort
-- `npx tsc --noEmit` fails after the engineer's edit → leave WIP, mark item `in-progress (build failed)`, exit
-- `npm test` fails → leave WIP, mark item `in-progress (test failed)`, exit
+- Cap reached (5/run)
+- Queue empty
+- `needs-human-planning` item
 
 ## After auto-fix
 

@@ -24,8 +24,23 @@
 5. **Pipeline:** software-engineer → code-review → smoke-test (`npm test`) → optional homebridge-deploy skill if user wants Pi-side verification.
 6. **PR via /pr** (always `--repo Haglerd/homebridge-ratgdo-forceclose`). If item has `**Issue:**` field, include `Closes #<number>` in PR body.
 7. **Update queue**: mark `done <pr-url>`, move to Recently completed.
-8. **On success**: loop back to step 1 unless cap reached or stop condition fires.
-9. **On failure**: leave `in-progress` with blocker, surface, STOP the drain.
+8. **On success**: loop back to step 0 unless cap reached or hard stop fires.
+9. **On hook fire** (AI-attribution / branch-shift / fork-PR / tsc warning): apply auto-recovery (see below), retry. After 3 retries on same hook+item, mark `in-progress (auto-fix exhausted: <hook>)` and **continue to next item** — don't halt the whole batch.
+
+## Recovery by hook type
+
+| Hook | Auto-recovery |
+|------|---------------|
+| AI-attribution | strip forbidden patterns from commit message, retry |
+| Branch-shift | `git checkout main && git pull --ff-only origin main`, reset stamp, retry |
+| Fork-PR | rebuild `gh pr create` with `--repo Haglerd/homebridge-ratgdo-forceclose`, retry |
+| Post-edit tsc (warns) | invoke software-engineer to fix type errors before next commit |
+
+## Hard stops (halt the drain)
+
+- Cap reached, queue empty
+- `needs-human-planning` item → STOP, surface
+- Force-close state machine without diagram → STOP, call planner
 
 ## Drain summary
 ```
