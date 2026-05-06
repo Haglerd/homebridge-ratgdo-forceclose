@@ -53,6 +53,19 @@ Begin auditing on invocation.
 - "Stuck in close-in-progress" cleanup paths missing
 - `Restoring obstFromStatus → true after error` log lines (should be `false`)
 
+### 9. Simplification & line-count reduction (user values this)
+- **Duplicate code blocks** — 5+ lines repeated ≥2 times across `src/*.ts`
+- **Characteristic getter/setter pairs** with near-identical HTTP call logic — extract a shared `callRatgdo(method, payload)` helper
+- **Repeated `try/catch + HAPStatus translation`** blocks — extract to a `withHAPError(fn)` wrapper
+- **Multiple traits sharing the same error path** — error mapping deserves one place
+- **Origin/Referer header attachment** repeated at every outbound call — consolidate into a single `request()` builder
+- **Wrapper functions adding no logic**
+- **Single-use abstractions** — used in exactly one place, candidate for inlining
+- **Unused imports** — `import` statements for things not referenced
+- **Orphaned files** — `.ts` with no exports referenced anywhere
+- **Commented-out code** — git remembers; delete
+- **Schema interface fields with no implementation** — drift between TS interface and config.schema.json plus actual usage
+
 ## Workflow
 
 ### Step 1 — Read existing queue
