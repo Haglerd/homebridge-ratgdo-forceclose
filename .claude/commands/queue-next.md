@@ -1,11 +1,16 @@
 # /queue-next
 
-Pick the top actionable item from `QUEUE.md`, route it through the agent pipeline, report back when done.
+**Drain the queue**: process eligible items from `QUEUE.md` one at a time, each producing its own PR, until empty or stop condition.
 
-## Steps
+## Usage
+- `/queue-next` — drain mode, cap 10
+- `/queue-next 3` — up to 3
+- `/queue-next <id>` — single item
+
+## Steps (looped per item)
 
 1. **Read `QUEUE.md`** under `## Active queue`.
-2. **Pick top by priority** (P0 > P1 > P2 > P3) and `Status: queued`.
+2. **Pick top by priority** (P0 > P1 > P2 > P3) and `Status: queued`. If empty, report and stop.
 3. **Mark `in-progress`**.
 4. **Route:**
    - **Item has `**Issue:**` field** → fetch issue body via `gh issue view <n> --repo Haglerd/homebridge-ratgdo-forceclose`, use the embedded plan; skip planner; go straight to software-engineer.
@@ -17,6 +22,17 @@ Pick the top actionable item from `QUEUE.md`, route it through the agent pipelin
 5. **Pipeline:** software-engineer → code-review → smoke-test (`npm test`) → optional homebridge-deploy skill if user wants Pi-side verification.
 6. **PR via /pr** (always `--repo Haglerd/homebridge-ratgdo-forceclose`). If item has `**Issue:**` field, include `Closes #<number>` in PR body.
 7. **Update queue**: mark `done <pr-url>`, move to Recently completed.
+8. **On success**: loop back to step 1 unless cap reached or stop condition fires.
+9. **On failure**: leave `in-progress` with blocker, surface, STOP the drain.
+
+## Drain summary
+```
+Queue drain summary (homebridge-ratgdo-forceclose):
+- Items processed: N
+- PRs opened: <list>
+- Stopped at: <reason>
+- Queue remaining: <count>
+```
 
 ## Stop conditions
 
