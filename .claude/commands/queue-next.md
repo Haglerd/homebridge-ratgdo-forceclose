@@ -9,6 +9,8 @@
 
 ## Steps (looped per item)
 
+0. **Defensive branch sync** — `git checkout main && git pull --ff-only origin main`. Reset branch-shift stamp (`rm .git/.claude_session_branch`). Preempts external-process branch shifts.
+
 1. **Read `QUEUE.md`** under `## Active queue`.
 2. **Pick top by priority** (P0 > P1 > P2 > P3) and `Status: queued`. If empty, report and stop.
 3. **Mark `in-progress`**.
@@ -33,6 +35,10 @@ Queue drain summary (homebridge-ratgdo-forceclose):
 - Stopped at: <reason>
 - Queue remaining: <count>
 ```
+
+## Partial drains are normal
+
+If a hook, branch shift, or failure stops the drain mid-batch, remaining items stay queued. Re-run `/queue-next` to continue.
 
 ## Stop conditions
 
