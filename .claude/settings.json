@@ -8,7 +8,8 @@
       "Bash(npx tsc *)",
       "Bash(gh pr *)",
       "Bash(gh run *)",
-      "Bash(ssh dakot@100.121.96.114 *)"
+      "Bash(ssh dakot@100.121.96.114 *)",
+      "Bash(curl -s http://100.121.96.114:8581 *)"
     ],
     "deny": [
       "Bash(rm -rf *)",
