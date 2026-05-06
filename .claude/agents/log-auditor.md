@@ -113,18 +113,65 @@ A child-bridge restart is ONE finding spanning many log lines (pre-restart error
 
 Mark recurrences vs new findings.
 
-### Step 6 — Append
+### Step 6 — Generate fix plan per finding (planner subagent)
+
+For each NEW finding, invoke the `planner` agent with log evidence + classification + plugin context. Capture plan verbatim. Skip when state-machine-touched / schema-changing / >3 files / investigation-shaped — mark those `needs-human-planning`.
+
+### Step 7 — Create issue + append to queue
+
+**Create GitHub issue:**
+
+```bash
+gh issue create --repo Haglerd/homebridge-ratgdo-forceclose \
+  --title "[<Pn>] log-audit: <short title>" \
+  --body-file /tmp/issue-body.md
+```
+
+Issue body template:
+
+```markdown
+## Impact
+<observed failure: plugin error, state-machine drift, HTTP failure, etc.>
+
+## Evidence
+- **Source**: log-audit YYYY-MM-DD HH:MM (Homebridge journal)
+- **Severity**: P0/P1/P2
+- **Recurrence**: <count> over <window>
+- **First seen**: <ts>
+- **Last seen**: <ts>
+
+\`\`\`
+<3-10 representative log lines>
+\`\`\`
+
+## Recommended fix (planner sub-agent output)
+<plan from planner; else "Needs human planning">
+
+## Test plan
+<npm test + deploy + Home app verify + soak>
+
+## Tracking
+- [ ] PR opened
+- [ ] tsc + tests pass
+- [ ] Soak window (24h+ no recurrence)
+- [ ] Closed via merge
+
+## Auto-fix eligibility
+- **auto-fixable** / **needs-human-planning**
+
+---
+*Created by log-auditor agent.*
+```
+
+**Then append to `QUEUE.md`:**
 
 ```markdown
 ### [Pn] log-audit-YYYYMMDD-NNN — <short title>
 **Status:** queued
 **Source:** log-audit YYYY-MM-DD HH:MM (Homebridge journal)
+**Issue:** Haglerd/homebridge-ratgdo-forceclose#<number>
 **Acceptance:** <testable done state>
-**Notes:** <severity, recurrence count, plugin context>
-**Log evidence:**
-\`\`\`
-<3-5 representative lines>
-\`\`\`
+**Notes:** <severity + recurrence count + auto-fix-eligibility>
 ```
 
 ### Step 7 — Update checkpoint

@@ -6,7 +6,7 @@ Combined log audit + autonomous fix pipeline. Used by the scheduled task for una
 
 1. Invoke `log-auditor` agent → pulls Pi journalctl since checkpoint, appends new findings to QUEUE.md
 2. If new findings count > 0, evaluate top eligible item against safety rails (below)
-3. If eligible, invoke pipeline: `planner` (if needed) → `software-engineer` → `code-review` → `/pr`
+3. If eligible, fetch the linked issue's plan (generated at audit time), skip planner, route directly to `software-engineer` → `code-review` → npm test → `/pr` (with `Closes #<issue-number>`)
 4. If no eligible item, report and exit
 
 ## Safety rails — auto-fix eligibility
@@ -17,6 +17,8 @@ A finding can be picked for auto-fix ONLY IF all of these are true:
 - **Status** is `queued`
 - **Source** is `log-audit`
 - **NOT** touching force-close state machine (`obstFromStatus` toggles, force-close timing) — those require planner-first
+- **Has linked issue with embedded plan** (issue body has "Recommended fix (planner sub-agent output)" with actual content)
+- **Auto-fix eligibility marker** in issue body says `auto-fixable` (NOT `needs-human-planning`)
 - **NOT** changing config.schema.json shape (breaks user configs)
 - **NOT** touching > 3 files
 - **Recurrence count >= 2** OR **severity P0**
