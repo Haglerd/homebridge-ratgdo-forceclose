@@ -28,6 +28,7 @@
    - If green → `gh pr merge <#> --repo Haglerd/homebridge-ratgdo-forceclose --squash --delete-branch`
    - If red → leave open, surface failures, continue to next item
 8. **Update queue**: mark `done <pr-url>`, move to Recently completed.
+8a. **Auto-unblock dependent items.** Scan QUEUE.md for items whose `**Status:**` line contains `blocked` AND whose `**Notes:**` / `**Pre-req:**` text references the just-completed item's id. Flip those items from `blocked` back to `queued` (preserve other status modifiers like `needs-human-planning`). Commit + push the flip together with the `done` mark. **Mandatory** — without it, dependent items stay blocked indefinitely.
 9. **On success**: loop back to step 0 unless cap reached or hard stop fires.
 10. **On code-review architectural problem**: re-invoke planner with code-review findings as context. Loop up to 3 planner-revision iterations.
 11. **On unit-test failure**: engineer fixes → code-review → retest. Loop up to 3 iterations.
