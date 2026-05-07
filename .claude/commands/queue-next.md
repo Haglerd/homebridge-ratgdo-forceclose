@@ -46,12 +46,14 @@
 
 ## Hard stops (last-resort halts only)
 
-This list is **EXHAUSTIVE.** "Context is getting heavy", "checkpoint here", "let me confirm with the user" are NOT halt reasons — they are autonomy violations. Finish the current item and continue until one of the listed conditions actually fires.
+This list is **EXHAUSTIVE.** "Context is getting heavy", "checkpoint here", "let me confirm with the user", **"only P3 items remain"**, "the high-value work is done" are NOT halt reasons — they are autonomy violations. It's a drain, not a P1-only run; priority orders WHICH item runs first, it does NOT define a stop boundary. Finish the current item and continue until one of the listed conditions actually fires.
 
 - Cap reached, queue empty
 - 3 planner-revision iterations on same item didn't converge
 - 3 engineer+test iterations didn't pass
 - 3 hook auto-recovery attempts in a row failed on same hook+item
+
+**Cap accounting:** counts FEATURE items, not the release-bump or QUEUE.md done-mark PRs that wrap them.
 
 Even at halt: file a comment on the linked issue summarizing every attempt (plans considered, code-review feedback per attempt, test failures). Halt is a hand-off with full context, not an early bail.
 
