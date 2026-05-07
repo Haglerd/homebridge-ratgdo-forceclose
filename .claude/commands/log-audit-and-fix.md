@@ -52,6 +52,18 @@ Each halt files a comment on the linked issue with everything tried.
 - QUEUE.md item marked `done <pr-url>`, moved to "Recently completed"
 - Checkpoint updated
 
+## End-of-batch release (last step of the run)
+
+After all eligible items in this run have been processed, if ANY merged PR in this batch touched plugin code (`src/*.ts`, `package.json`, `config.schema.json`):
+
+1. On main: `npm version patch --no-git-tag-version` (bumps package.json + package-lock.json)
+2. `git add package.json package-lock.json && git commit -m "Release v<new-version>"`
+3. `git tag v<new-version>`
+4. `git push origin main && git push origin v<new-version>`
+5. `publish.yml` fires on tag push → `npm publish --provenance`
+
+If only docs / log-audit-state / .claude files changed this batch, skip the bump.
+
 ## Don't
 - Don't run > 5 fixes per invocation (current cap; adjust here if needed).
 - Don't auto-pick force-close state-machine items.

@@ -51,11 +51,26 @@
 
 Even at halt: file a comment on the linked issue summarizing every attempt (plans considered, code-review feedback per attempt, test failures). Halt is a hand-off with full context, not an early bail.
 
+## End-of-batch release: tag + npm publish
+
+After the drain finishes, if ANY merged PR in this batch touched plugin code (`src/*.ts`, `package.json` deps, `config.schema.json`), cut a release:
+
+1. On `main`, bump `package.json` patch version: `npm version patch --no-git-tag-version` (just edits package.json + package-lock.json without committing)
+2. Commit: `git add package.json package-lock.json && git commit -m "Release v<new-version>"`
+3. Tag: `git tag v<new-version>`
+4. Push: `git push origin main && git push origin v<new-version>`
+5. `publish.yml` fires on the tag push → `npm publish --provenance`
+
+Skip the bump if only doc / .claude / test-only files changed this batch.
+
+This runs ONCE per drain (after all eligible items shipped), not per-PR.
+
 ## Drain summary
 ```
 Queue drain summary (homebridge-ratgdo-forceclose):
 - Items processed: N
 - PRs opened: <list>
+- Released: v<new-version> on npm (if applicable)
 - Stopped at: <reason>
 - Queue remaining: <count>
 ```
