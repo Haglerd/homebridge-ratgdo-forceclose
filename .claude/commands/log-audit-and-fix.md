@@ -5,9 +5,10 @@ Combined log audit + autonomous fix pipeline. Used by the scheduled task for una
 ## Pipeline
 
 1. Invoke `log-auditor` agent → pulls Pi journalctl since checkpoint, appends new findings to QUEUE.md
-2. If new findings count > 0, evaluate top eligible item against safety rails (below)
-3. If eligible: fetch the linked issue's plan (or invoke planner if no plan / `needs-human-planning` flag — planner ALWAYS produces a plan), route to `software-engineer` → `code-review` → `npm test` → `/pr` (with `Closes #<issue-number>`) → **agent merges after CI green**: `gh pr checks <#> --watch` then `gh pr merge <#> --squash --delete-branch`.
-4. If no eligible item, report and exit.
+2. **Persist auditor changes to git BEFORE evaluating auto-fix.** If `git status --short QUEUE.md` shows `M`, branch (`queue/log-audit-<YYYY-MM-DD>-findings`), commit (`queue: log-audit <date> findings (<N> items: <comma-list>)`), push, open a PR via `/pr` with body summarizing the new findings, squash-merge after CI green. **Never exit with QUEUE.md uncommitted** — findings must be durable even if auto-fix bails or hits a halt.
+3. If new findings count > 0, evaluate top eligible item against safety rails (below)
+4. If eligible: fetch the linked issue's plan (or invoke planner if no plan / `needs-human-planning` flag — planner ALWAYS produces a plan), route to `software-engineer` → `code-review` → `npm test` → `/pr` (with `Closes #<issue-number>`) → **agent merges after CI green**: `gh pr checks <#> --watch` then `gh pr merge <#> --squash --delete-branch`.
+5. If no eligible item, report and exit. (QUEUE.md already committed via step 2.)
 
 ## Safety rails — auto-fix eligibility
 
@@ -36,6 +37,8 @@ Sort by priority (P0 first, then P1) and earliest recurrence; auto-fix up to **5
 3-retry budget per hook+item. After exhaustion, mark `in-progress (auto-fix exhausted)` and continue to next item.
 
 ## Hard stops (last resort)
+
+This list is **EXHAUSTIVE.** "Context getting heavy", "checkpoint here", "let me pause to confirm" are NOT halts — they are autonomy violations. Finish the current item and continue until one of the listed conditions actually fires.
 
 - Cap reached (5/run)
 - Queue empty
