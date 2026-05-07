@@ -44,6 +44,8 @@
 
 ## Hard stops (last-resort halts only)
 
+This list is **EXHAUSTIVE.** "Context is getting heavy", "checkpoint here", "let me confirm with the user" are NOT halt reasons — they are autonomy violations. Finish the current item and continue until one of the listed conditions actually fires.
+
 - Cap reached, queue empty
 - 3 planner-revision iterations on same item didn't converge
 - 3 engineer+test iterations didn't pass
