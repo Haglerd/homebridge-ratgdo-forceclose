@@ -57,13 +57,16 @@ Even at halt: file a comment on the linked issue summarizing every attempt (plan
 
 ## End-of-batch release: tag + npm publish
 
-After the drain finishes, if ANY merged PR in this batch touched plugin code (`src/*.ts`, `package.json` deps, `config.schema.json`), cut a release:
+After the drain finishes, if ANY merged PR in this batch touched plugin code (`src/*.ts`, `package.json` deps, `config.schema.json`), cut a release. **Direct-to-main pushes are blocked by harness policy** — release goes through a PR like every other change:
 
-1. On `main`, bump `package.json` patch version: `npm version patch --no-git-tag-version` (just edits package.json + package-lock.json without committing)
-2. Commit: `git add package.json package-lock.json && git commit -m "Release v<new-version>"`
-3. Tag: `git tag v<new-version>`
-4. Push: `git push origin main && git push origin v<new-version>`
-5. `publish.yml` fires on the tag push → `npm publish --provenance`
+1. From main (NOT a feature branch — checkout main first to avoid the branch-shift guard): `git checkout main && git pull --ff-only origin main`. If hook fires from a prior item's branch, recover per its recovery instruction.
+2. Branch: `git checkout -b release/v<new-version>`
+3. Bump version: `npm version patch --no-git-tag-version` (edits package.json + package-lock.json)
+4. Commit: `git add package.json package-lock.json && git commit -m "Release v<new-version>"`
+5. Push the branch, open a PR via `/pr`, squash-merge with `gh pr merge --squash --delete-branch`.
+6. AFTER squash-merge, sync local main: `git checkout main && git pull --ff-only origin main`
+7. Tag the merge commit: `git tag v<new-version>` and `git push origin v<new-version>`
+8. `publish.yml` fires on the tag push → `npm publish --provenance`
 
 Skip the bump if only doc / .claude / test-only files changed this batch.
 
