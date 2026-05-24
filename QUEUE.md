@@ -83,6 +83,48 @@ Priority-ordered list of pending work items. Top = next to work.
 **Complexity:** S
 **Notes:** index.js:1072-1075 (definition), 1115 (sole call site). Four-line function used exactly once. Simplification category; no state-machine touch.
 
+### [P3] codebase-audit-2026-05-23-01 — handleOnSet / handleRebootOnSet / handleReconnectHKOnSet share copy-pasted cooldown/busy/host-guard prelude
+**Status:** queued
+**Source:** codebase-audit 2026-05-23 (Pi cron)
+**Issue:** Haglerd/homebridge-ratgdo-forceclose#28
+**Acceptance:** All three on-set handlers delegate their prelude to a shared helper; observable cooldown/busy/host-guard behaviour unchanged
+**Notes:** Lines 304-334, 348-377, 408-452. Same ~8-line block (value guard, cooldown check, busy check, ratgdoHost check, set busy/lastAt) copy-pasted three times. A shared guardedAction() helper would eliminate ~50 lines of triplication. No state-machine touch.
+
+### [P3] codebase-audit-2026-05-23-02 — resetSwitch / resetRebootSwitch / resetReconnectHKSwitch are three near-identical momentary-reset helpers
+**Status:** queued
+**Source:** codebase-audit 2026-05-23 (Pi cron)
+**Issue:** Haglerd/homebridge-ratgdo-forceclose#29
+**Acceptance:** A single resetMomentarySwitch(service, delayMs) helper replaces all three; no behaviour change; existing P2 null-guard bug on resetSwitch fixed independently
+**Notes:** Lines 337-343, 380-387, 455-462. Each is a setTimeout wrapping updateCharacteristic(On, false) in a try/catch, differing only in which service they reference. Duplication/simplification category; no state-machine touch.
+
+### [P3] codebase-audit-2026-05-23-03 — verifyCloseStarted hardcodes maxWaitMs = 10000 with no named constant or config key
+**Status:** queued
+**Source:** codebase-audit 2026-05-23 (Pi cron)
+**Issue:** Haglerd/homebridge-ratgdo-forceclose#30
+**Acceptance:** maxWaitMs extracted to a named module-level constant VERIFY_CLOSE_STARTED_MS with a comment; or made configurable; rationale documented
+**Notes:** index.js:803. Local magic number — not exposed in config, not named at module level, inconsistent with other configurable timeouts. With TTC=10s the window is tight. Magic-number category; no state-machine touch.
+
+### [P3] codebase-audit-2026-05-23-04 — useForceClose path uses hardcoded SETTLE_AFTER_CLOSED_MS=1000; legacy path uses configurable postCloseSettleMs (default 8000)
+**Status:** queued
+**Source:** codebase-audit 2026-05-23 (Pi cron)
+**Issue:** Haglerd/homebridge-ratgdo-forceclose#31
+**Acceptance:** useForceClose branch reads this.postCloseSettleMs (or discrepancy documented in schema); users with slow ratgdo firmware get their configured settle time in default mode
+**Notes:** index.js:643 (SETTLE_AFTER_CLOSED_MS = 1000) vs this.postCloseSettleMs (0-60000, default 8000). useForceClose is the default since v1.2.2. Users who raised postCloseSettleMs for firmware-stability reasons silently lose that protection in the default mode. Config parity / magic-number category; no state-machine touch.
+
+### [P3] codebase-audit-2026-05-23-05 — Valid door-state string set duplicated in mapDoorStateToHK and waitForRatgdoReady
+**Status:** queued
+**Source:** codebase-audit 2026-05-23 (Pi cron)
+**Issue:** Haglerd/homebridge-ratgdo-forceclose#32
+**Acceptance:** A single named constant defines the valid door-state strings; both mapDoorStateToHK (line 1004) and waitForRatgdoReady validStates array (line 897) derive from it; no behaviour change
+**Notes:** ['Open','Closed','Opening','Closing','Stopped'] appears twice independently. Adding a new firmware door state requires two edits. Arch drift / duplication category; no state-machine touch.
+
+### [P3] codebase-audit-2026-05-23-06 — postSetGdoWithRetry mixes key/value positional args with nullable extraPairs — awkward API
+**Status:** queued
+**Source:** codebase-audit 2026-05-23 (Pi cron)
+**Issue:** Haglerd/homebridge-ratgdo-forceclose#33
+**Acceptance:** postSetGdoWithRetry accepts a single pairs object; callers updated to pre-build the object; no behaviour change
+**Notes:** index.js:868. Signature async postSetGdoWithRetry(key, value, extraPairs) merges key/value + extraPairs internally. Callers already build pairs for postSetGdoMulti; a unified pairs-only signature aligns both APIs. Arch smell category; no state-machine touch.
+
 ---
 
 ## Force-close-touch findings (DO NOT auto-queue)
