@@ -83,6 +83,48 @@ Priority-ordered list of pending work items. Top = next to work.
 **Complexity:** S
 **Notes:** index.js:1072-1075 (definition), 1115 (sole call site). Four-line function used exactly once. Simplification category; no state-machine touch.
 
+### [P3] codebase-audit-2026-05-30-01 — TargetDoorState computation duplicated in constructor onGet and applyStatusToSensors
+**Status:** queued
+**Source:** codebase-audit 2026-05-30 (Pi cron)
+**Issue:** Haglerd/homebridge-ratgdo-forceclose#35
+**Acceptance:** A single helper `mapCurrentToTargetDoorState(hkCur)` exists and is called from both the constructor `onGet` handler and `applyStatusToSensors`; no inline ternary repetition.
+**Notes:** The OPEN/OPENING → TargetDoorState.OPEN else CLOSED mapping is copy-pasted at constructor lines 172–176 and applyStatusToSensors lines 536–538. Extract a module-level helper. No state-machine touch; no schema-sync.
+
+### [P3] codebase-audit-2026-05-30-02 — handleReconnectHKOnSet holdMs bounds (10000/30000) are unnamed magic numbers
+**Status:** queued
+**Source:** codebase-audit 2026-05-30 (Pi cron)
+**Issue:** Haglerd/homebridge-ratgdo-forceclose#36
+**Acceptance:** RECONNECT_HK_MIN_HOLD_MS and RECONNECT_HK_MAX_HOLD_MS module-level constants replace the inline literals at line 448; comments in the constants explain the WiFi-cycle window rationale.
+**Notes:** `Math.max(10000, Math.min(this.reconnectHKCooldownMs, 30000))` — both bounds are intentional (10 s = WiFi-cycle window, 30 s = freeze cap) but have no named constants. No state-machine touch; no schema-sync.
+
+### [P3] codebase-audit-2026-05-30-03 — /status.json request timeout inconsistent: 3000ms in getStatusJson vs 2000ms in waitForRatgdoReady
+**Status:** queued
+**Source:** codebase-audit 2026-05-30 (Pi cron)
+**Issue:** Haglerd/homebridge-ratgdo-forceclose#37
+**Acceptance:** Two named constants (STATUS_JSON_TIMEOUT_MS=3000, STATUS_JSON_READY_PROBE_TIMEOUT_MS=2000) replace the inline literals at both call sites; intent of the shorter reboot-probe timeout is documented.
+**Notes:** Same endpoint queried with different hardcoded timeouts in getStatusJson (~line 830) and waitForRatgdoReady (~line 908). Related to issue #30 (magic number category). No state-machine touch; no schema-sync.
+
+### [P3] codebase-audit-2026-05-30-04 — engines.node in package.json lists EOL Node.js 18 and 20
+**Status:** queued
+**Source:** codebase-audit 2026-05-30 (Pi cron)
+**Issue:** Haglerd/homebridge-ratgdo-forceclose#38
+**Acceptance:** engines.node trimmed to `"^22.0.0 || ^24.0.0"`; no runtime code touched.
+**Notes:** Node 18 EOL April 2025, Node 20 EOL April 2026. Keeping dead versions signals false support and suppresses npm version warnings for users on unsupported runtimes. No code change; no state-machine touch; no schema-sync.
+
+### [P3] codebase-audit-2026-05-30-05 — mapDoorStateToHK has a dead null-guard on the module-level Characteristic variable
+**Status:** queued
+**Source:** codebase-audit 2026-05-30 (Pi cron)
+**Issue:** Haglerd/homebridge-ratgdo-forceclose#39
+**Acceptance:** `if (!Characteristic) return 0;` guard removed from mapDoorStateToHK; all call sites verified to only run after module init; node --check passes.
+**Notes:** index.js line 1005. Characteristic is always set before any call site can execute (all callers are constructor-registered callbacks or polling loop). Guard never fires; if it did, silently returning 0 (OPEN) would be misleading. No state-machine touch; no schema-sync.
+
+### [P3] codebase-audit-2026-05-30-06 — handleTargetDoorStateSet delegates to handleOnSet(true) — tight cross-handler coupling
+**Status:** queued
+**Source:** codebase-audit 2026-05-30 (Pi cron)
+**Issue:** Haglerd/homebridge-ratgdo-forceclose#40
+**Acceptance:** A private `_triggerForceClose()` method contains the busy/cooldown/host-guard prelude and runForceClose() dispatch; both handleOnSet and handleTargetDoorStateSet call it; runForceClose() body is untouched.
+**Notes:** index.js line 292. handleTargetDoorStateSet (GarageDoorOpener onSet) calls handleOnSet(true) directly, coupling two unrelated HAP service handlers. Extract the prelude (lines 304–335) into a private helper; runForceClose() itself must NOT be touched. No schema-sync; adjacent to state-machine (caller-side only).
+
 ---
 
 ## Force-close-touch findings (DO NOT auto-queue)
