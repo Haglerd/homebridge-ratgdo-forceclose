@@ -100,3 +100,45 @@ These findings touch force-close state-machine timing. Human review required bef
 ## Recently completed
 
 _(prune to last 10)_
+
+### [P2] codebase-audit-2026-11-22-01 - postSetGdoMulti has no timeoutMs so the forceClose POST times out at 5s when forceCloseHoldMs 5000ms
+**Status:** queued
+**Source:** codebase-audit 2026-11-22 (Pi cron)
+**Issue:** Haglerd/homebridge-ratgdo-forceclose#78
+**Acceptance:** A unit/integration test shows the forceClose POST with forceCloseHoldMs=8000 completes successfully rather than failing with ETIMEDOUT; postSetGdoMulti passes a timeout of at least forceCloseHoldMs + buffer when calling httpRequestWithAuth for the forceClose key.
+**Notes:** `index.js`. index.js:630 calls postSetGdoMulti( forceClose: this.forceCloseHoldMs ). postSetGdoMulti (line 848) omits timeoutMs, so httpRequest defaults to 5000ms (line 1077). The firmware holds the button for forceCloseHoldMs ms before returning 200; at any config value above 5000ms (schema max is 10000ms) the HTTP client fires ETIMEDOUT first, the POST failure path at line 633 logs 'Is the firmware patched?' and returns, then handleOnSet emits 'Force close sequence complete.' wrong diagnosis, door may still close in firmware background.
+
+### [P2] codebase-audit-2026-11-22-02 - handleOnSet logs 'Force close sequence complete.' when runForceClose resolves silently after a failure
+**Status:** queued
+**Source:** codebase-audit 2026-11-22 (Pi cron)
+**Issue:** Haglerd/homebridge-ratgdo-forceclose#79
+**Acceptance:** After a runForceClose POST failure or a FAILED outcome (door never moved), the log shows only the error message; 'Force close sequence complete.' is emitted only when the door actually reached Closed.
+**Notes:** `index.js`. handleOnSet line 329: .then(() = this.log.info('Force close sequence complete.')) fires whenever runForceClose resolves. runForceClose resolves (does not throw) in two failure paths: line 633 (POST ETIMEDOUT 'Force-close: POST failed') and line 671 (door never moved 'Force-close: FAILED'). Both produce the misleading 'complete' log immediately after the error. The .catch branch at line 330 is never reached for these paths.
+
+### [P2] codebase-audit-2026-11-22-03 - verifyCloseStarted 10s window is shorter than max configurable TTCseconds (30s), causing false CRITICAL failur
+**Status:** queued
+**Source:** codebase-audit 2026-11-22 (Pi cron)
+**Issue:** Haglerd/homebridge-ratgdo-forceclose#80
+**Acceptance:** With bundleTtcZero=false and a device TTCseconds of 15, verifyCloseStarted does not log a CRITICAL error and does not abort the sequence before the door starts closing; the window is long enough to cover the full TTC.
+**Notes:** `index.js`. verifyCloseStarted line 803: maxWaitMs = 10000. Schema allows deviceDefaults.TTCseconds up to 30 (line 177). When bundleTtcZero=false, or when skipBypass=true (line 697, TTC not bundled even if bundleTtcZero=true), the original TTC governs. If TTCseconds 10 the door has not started moving when verifyCloseStarted times out. Result: CRITICAL log at line 723, early return, finally block fires emergency restore door eventually closes but without the obstruction bypass still active.
+
+### [P3] codebase-audit-2026-11-22-04 - CRITICAL error log at verifyCloseStarted failure says 'restore manually if needed' but finally block auto-rest
+**Status:** queued
+**Source:** codebase-audit 2026-11-22 (Pi cron)
+**Issue:** Haglerd/homebridge-ratgdo-forceclose#81
+**Acceptance:** After verifyCloseStarted returns false the log says the restore is happening automatically (or omits the manual-restore advice); no log tells the user to do something the plugin already does.
+**Notes:** `index.js`. index.js:723 logs '...Skipping Step 3 to avoid leaving in inconsistent state restore manually if needed.' The return inside the try block triggers the finally block at line 751; because flashApplied=true, the finally block warns and calls postSetGdoWithRetry to restore obstFromStatus (and TTC if bundled). The manual-restore advice is incorrect: the restore fires automatically. A user who follows the advice and manually restores after the auto-restore has already run would at worst re-write the same value, but the log is misleading.
+
+### [P3] codebase-audit-2026-11-22-05 - smoke.test.js never constructs RatgdoForceCloseAccessory; constructor-level regressions are invisible to CI
+**Status:** queued
+**Source:** codebase-audit 2026-11-22 (Pi cron)
+**Issue:** Haglerd/homebridge-ratgdo-forceclose#82
+**Acceptance:** npm test instantiates RatgdoForceCloseAccessory with a minimal config (at least ratgdoHost set) and asserts getServices() returns a non-empty array; a deliberate null-dereference introduced in the constructor causes npm test to fail.
+**Notes:** `tests/smoke.test.js`. tests/smoke.test.js:89-95: plugin(fakeApi) calls registerAccessory and stores the constructor in registered 0 .ctor, but new ctor(...) is never called. The mock-API smoke check only verifies that the module loads and registers itself. Any runtime error in the constructor wrong property access, broken service setup, bad setCharacteristic call is invisible. The existing fakeService/fakeChar proxy is rich enough to support instantiation without a real HAP runtime.
+
+### [P3] codebase-audit-2026-11-22-06 - config.schema.json headerDisplay describes the legacy obstFromStatus dance, which is wrong for the default use
+**Status:** queued
+**Source:** codebase-audit 2026-11-22 (Pi cron)
+**Issue:** Haglerd/homebridge-ratgdo-forceclose#83
+**Acceptance:** headerDisplay describes the default forceClose mode (single POST to firmware, no flash write, no restore); the obstFromStatus description is moved to the legacy fieldset or a conditional note.
+**Notes:** `config.schema.json`. config.schema.json line 4: headerDisplay says 'temporarily changes ratgdo's obstruction-source setting... then restores the setting' this is the obstFromStatus three-step dance. Since v1.2.2 useForceClose defaults to true (line 99-100 schema, line 79 code), the description is wrong for the vast majority of installs. Additionally the header says 'momentary switch' while presentAsGarageDoor also defaults to true, presenting a GarageDoor tile. New users reading the UI header are misinformed about how the plugin actually works.
